@@ -1,5 +1,6 @@
 import sys
-sys.path += ['../']
+
+sys.path += ["../"]
 import torch
 import os
 import faiss
@@ -10,7 +11,7 @@ from utils.util import (
     StreamingDataset,
     EmbeddingCache,
     get_checkpoint_no,
-    get_latest_ann_data
+    get_latest_ann_data,
 )
 import csv
 import copy
@@ -23,7 +24,7 @@ from transformers import (
     get_linear_schedule_with_warmup,
     RobertaModel,
 )
-from data.msmarco_data import GetProcessingFn  
+from data.msmarco_data import GetProcessingFn
 from model.models import MSMarcoConfigDict, ALL_MODELS
 from torch import nn
 import torch.distributed as dist
@@ -38,7 +39,7 @@ import random
 import time
 import pytrec_eval
 
-torch.multiprocessing.set_sharing_strategy('file_system')
+torch.multiprocessing.set_sharing_strategy("file_system")
 
 
 logger = logging.getLogger(__name__)
@@ -62,12 +63,14 @@ def get_latest_checkpoint(args):
         scheduler_path = os.path.join(chk_path, "scheduler.pt")
         return os.path.exists(scheduler_path)
 
-    checkpoint_nums = [get_checkpoint_no(
-        s) for s in subdirectories if valid_checkpoint(s)]
+    checkpoint_nums = [
+        get_checkpoint_no(s) for s in subdirectories if valid_checkpoint(s)
+    ]
 
     if len(checkpoint_nums) > 0:
-        return os.path.join(args.training_dir, "checkpoint-" +
-                            str(max(checkpoint_nums))) + "/", max(checkpoint_nums)
+        return os.path.join(
+            args.training_dir, "checkpoint-" + str(max(checkpoint_nums))
+        ) + "/", max(checkpoint_nums)
     return args.init_model_dir, 0
 
 
@@ -76,7 +79,7 @@ def load_positive_ids(args):
     logger.info("Loading query_2_pos_docid")
     training_query_positive_id = {}
     query_positive_id_path = os.path.join(args.data_dir, "train-qrel.tsv")
-    with open(query_positive_id_path, 'r', encoding='utf8') as f:
+    with open(query_positive_id_path, "r", encoding="utf8") as f:
         tsvreader = csv.reader(f, delimiter="\t")
         for [topicid, docid, rel] in tsvreader:
             assert rel == "1"
@@ -88,7 +91,7 @@ def load_positive_ids(args):
     dev_query_positive_id = {}
     query_positive_id_path = os.path.join(args.data_dir, "dev-qrel.tsv")
 
-    with open(query_positive_id_path, 'r', encoding='utf8') as f:
+    with open(query_positive_id_path, "r", encoding="utf8") as f:
         tsvreader = csv.reader(f, delimiter="\t")
         for [topicid, docid, rel] in tsvreader:
             topicid = int(topicid)
@@ -128,8 +131,7 @@ def load_model(args, checkpoint_path):
     if args.local_rank != -1:
         model = torch.nn.parallel.DistributedDataParallel(
             model,
-            device_ids=[
-                args.local_rank],
+            device_ids=[args.local_rank],
             output_device=args.local_rank,
             find_unused_parameters=True,
         )
@@ -137,11 +139,8 @@ def load_model(args, checkpoint_path):
 
 
 def InferenceEmbeddingFromStreamDataLoader(
-        args,
-        model,
-        train_dataloader,
-        is_query_inference=True,
-        prefix=""):
+    args, model, train_dataloader, is_query_inference=True, prefix=""
+):
     # expect dataset from ReconstructTrainingSet
     results = {}
     eval_batch_size = args.per_gpu_eval_batch_size
@@ -157,21 +156,20 @@ def InferenceEmbeddingFromStreamDataLoader(
         dist.barrier()
     model.eval()
 
-    for batch in tqdm(train_dataloader,
-                      desc="Inferencing",
-                      disable=args.local_rank not in [-1,
-                                                      0],
-                      position=0,
-                      leave=True):
+    for batch in tqdm(
+        train_dataloader,
+        desc="Inferencing",
+        disable=args.local_rank not in [-1, 0],
+        position=0,
+        leave=True,
+    ):
 
         idxs = batch[3].detach().numpy()  # [#B]
 
         batch = tuple(t.to(args.device) for t in batch)
 
         with torch.no_grad():
-            inputs = {
-                "input_ids": batch[0].long(),
-                "attention_mask": batch[1].long()}
+            inputs = {"input_ids": batch[0].long(), "attention_mask": batch[1].long()}
             if is_query_inference:
                 embs = model.module.query_emb(**inputs)
             else:
@@ -198,14 +196,19 @@ def StreamInferenceDoc(args, model, fn, prefix, f, is_query_inference=True):
     inference_batch_size = args.per_gpu_eval_batch_size  # * max(1, args.n_gpu)
     inference_dataset = StreamingDataset(f, fn)
     inference_dataloader = DataLoader(
-        inference_dataset,
-        batch_size=inference_batch_size)
+        inference_dataset, batch_size=inference_batch_size
+    )
 
     if args.local_rank != -1:
         dist.barrier()  # directory created
 
     _embedding, _embedding2id = InferenceEmbeddingFromStreamDataLoader(
-        args, model, inference_dataloader, is_query_inference=is_query_inference, prefix=prefix)
+        args,
+        model,
+        inference_dataloader,
+        is_query_inference=is_query_inference,
+        prefix=prefix,
+    )
 
     logger.info("merging embeddings")
 
@@ -213,43 +216,56 @@ def StreamInferenceDoc(args, model, fn, prefix, f, is_query_inference=True):
     full_embedding = barrier_array_merge(
         args,
         _embedding,
-        prefix=prefix +
-        "_emb_p_",
+        prefix=prefix + "_emb_p_",
         load_cache=False,
-        only_load_in_master=True)
+        only_load_in_master=True,
+    )
     full_embedding2id = barrier_array_merge(
         args,
         _embedding2id,
-        prefix=prefix +
-        "_embid_p_",
+        prefix=prefix + "_embid_p_",
         load_cache=False,
-        only_load_in_master=True)
+        only_load_in_master=True,
+    )
 
     return full_embedding, full_embedding2id
 
 
 def generate_new_ann(
-        args,
-        output_num,
-        checkpoint_path,
-        training_query_positive_id,
-        dev_query_positive_id,
-        latest_step_num):
+    args,
+    output_num,
+    checkpoint_path,
+    training_query_positive_id,
+    dev_query_positive_id,
+    latest_step_num,
+):
     config, tokenizer, model = load_model(args, checkpoint_path)
 
     logger.info("***** inference of dev query *****")
     dev_query_collection_path = os.path.join(args.data_dir, "dev-query")
     dev_query_cache = EmbeddingCache(dev_query_collection_path)
     with dev_query_cache as emb:
-        dev_query_embedding, dev_query_embedding2id = StreamInferenceDoc(args, model, GetProcessingFn(
-            args, query=True), "dev_query_" + str(latest_step_num) + "_", emb, is_query_inference=True)
+        dev_query_embedding, dev_query_embedding2id = StreamInferenceDoc(
+            args,
+            model,
+            GetProcessingFn(args, query=True),
+            "dev_query_" + str(latest_step_num) + "_",
+            emb,
+            is_query_inference=True,
+        )
 
     logger.info("***** inference of passages *****")
     passage_collection_path = os.path.join(args.data_dir, "passages")
     passage_cache = EmbeddingCache(passage_collection_path)
     with passage_cache as emb:
-        passage_embedding, passage_embedding2id = StreamInferenceDoc(args, model, GetProcessingFn(
-            args, query=False), "passage_" + str(latest_step_num) + "_", emb, is_query_inference=False)
+        passage_embedding, passage_embedding2id = StreamInferenceDoc(
+            args,
+            model,
+            GetProcessingFn(args, query=False),
+            "passage_" + str(latest_step_num) + "_",
+            emb,
+            is_query_inference=False,
+        )
     logger.info("***** Done passage inference *****")
 
     if args.inference:
@@ -259,12 +275,18 @@ def generate_new_ann(
     train_query_collection_path = os.path.join(args.data_dir, "train-query")
     train_query_cache = EmbeddingCache(train_query_collection_path)
     with train_query_cache as emb:
-        query_embedding, query_embedding2id = StreamInferenceDoc(args, model, GetProcessingFn(
-            args, query=True), "query_" + str(latest_step_num) + "_", emb, is_query_inference=True)
+        query_embedding, query_embedding2id = StreamInferenceDoc(
+            args,
+            model,
+            GetProcessingFn(args, query=True),
+            "query_" + str(latest_step_num) + "_",
+            emb,
+            is_query_inference=True,
+        )
 
     if is_first_worker():
         dim = passage_embedding.shape[1]
-        print('passage embedding shape: ' + str(passage_embedding.shape))
+        print("passage embedding shape: " + str(passage_embedding.shape))
         top_k = args.topk_training
         faiss.omp_set_num_threads(16)
         cpu_index = faiss.IndexFlatIP(dim)
@@ -275,7 +297,12 @@ def generate_new_ann(
         # I: [number of queries, topk]
         _, dev_I = cpu_index.search(dev_query_embedding, 100)
         dev_ndcg, num_queries_dev = EvalDevQuery(
-            args, dev_query_embedding2id, passage_embedding2id, dev_query_positive_id, dev_I)
+            args,
+            dev_query_embedding2id,
+            passage_embedding2id,
+            dev_query_positive_id,
+            dev_I,
+        )
 
         # Construct new traing set ==================================
         chunk_factor = args.ann_chunk_factor
@@ -286,19 +313,17 @@ def generate_new_ann(
         num_queries = len(query_embedding)
         queries_per_chunk = num_queries // chunk_factor
         q_start_idx = queries_per_chunk * effective_idx
-        q_end_idx = num_queries if (
-            effective_idx == (
-                chunk_factor -
-                1)) else (
-            q_start_idx +
-            queries_per_chunk)
+        q_end_idx = (
+            num_queries
+            if (effective_idx == (chunk_factor - 1))
+            else (q_start_idx + queries_per_chunk)
+        )
         query_embedding = query_embedding[q_start_idx:q_end_idx]
         query_embedding2id = query_embedding2id[q_start_idx:q_end_idx]
 
         logger.info(
-            "Chunked {} query from {}".format(
-                len(query_embedding),
-                num_queries))
+            "Chunked {} query from {}".format(len(query_embedding), num_queries)
+        )
         # I: [number of queries, topk]
         _, I = cpu_index.search(query_embedding, top_k)
 
@@ -309,40 +334,50 @@ def generate_new_ann(
             passage_embedding2id,
             training_query_positive_id,
             I,
-            effective_q_id)
+            effective_q_id,
+        )
 
         logger.info("***** Construct ANN Triplet *****")
         train_data_output_path = os.path.join(
-            args.output_dir, "ann_training_data_" + str(output_num))
+            args.output_dir, "ann_training_data_" + str(output_num)
+        )
 
-        with open(train_data_output_path, 'w') as f:
+        with open(train_data_output_path, "w") as f:
             query_range = list(range(I.shape[0]))
             random.shuffle(query_range)
             for query_idx in query_range:
                 query_id = query_embedding2id[query_idx]
-                if query_id not in effective_q_id or query_id not in training_query_positive_id:
+                if (
+                    query_id not in effective_q_id
+                    or query_id not in training_query_positive_id
+                ):
                     continue
                 pos_pid = training_query_positive_id[query_id]
                 f.write(
                     "{}\t{}\t{}\n".format(
-                        query_id, pos_pid, ','.join(
-                            str(neg_pid) for neg_pid in query_negative_passage[query_id])))
+                        query_id,
+                        pos_pid,
+                        ",".join(
+                            str(neg_pid) for neg_pid in query_negative_passage[query_id]
+                        ),
+                    )
+                )
 
-        ndcg_output_path = os.path.join(
-            args.output_dir, "ann_ndcg_" + str(output_num))
-        with open(ndcg_output_path, 'w') as f:
-            json.dump({'ndcg': dev_ndcg, 'checkpoint': checkpoint_path}, f)
+        ndcg_output_path = os.path.join(args.output_dir, "ann_ndcg_" + str(output_num))
+        with open(ndcg_output_path, "w") as f:
+            json.dump({"ndcg": dev_ndcg, "checkpoint": checkpoint_path}, f)
 
         return dev_ndcg, num_queries_dev
 
 
 def GenerateNegativePassaageID(
-        args,
-        query_embedding2id,
-        passage_embedding2id,
-        training_query_positive_id,
-        I_nearest_neighbor,
-        effective_q_id):
+    args,
+    query_embedding2id,
+    passage_embedding2id,
+    training_query_positive_id,
+    I_nearest_neighbor,
+    effective_q_id,
+):
     query_negative_passage = {}
     SelectTopK = args.ann_measure_topk_mrr
     mrr = 0  # only meaningful if it is SelectTopK = True
@@ -361,7 +396,7 @@ def GenerateNegativePassaageID(
         top_ann_pid = I_nearest_neighbor[query_idx, :].copy()
 
         if SelectTopK:
-            selected_ann_idx = top_ann_pid[:args.negative_sample + 1]
+            selected_ann_idx = top_ann_pid[: args.negative_sample + 1]
         else:
             negative_sample_I_idx = list(range(I_nearest_neighbor.shape[1]))
             random.shuffle(negative_sample_I_idx)
@@ -390,18 +425,18 @@ def GenerateNegativePassaageID(
             neg_cnt += 1
 
     if SelectTopK:
-        print("Rank:" + str(args.rank) +
-              " --- ANN MRR:" + str(mrr / num_queries))
+        print("Rank:" + str(args.rank) + " --- ANN MRR:" + str(mrr / num_queries))
 
     return query_negative_passage
 
 
 def EvalDevQuery(
-        args,
-        query_embedding2id,
-        passage_embedding2id,
-        dev_query_positive_id,
-        I_nearest_neighbor):
+    args,
+    query_embedding2id,
+    passage_embedding2id,
+    dev_query_positive_id,
+    I_nearest_neighbor,
+):
     # [qid][docid] = docscore, here we use -rank as score, so the higher the rank (1 > 2), the higher the score (-1 > -2)
     prediction = {}
 
@@ -424,7 +459,8 @@ def EvalDevQuery(
 
     # use out of the box evaluation script
     evaluator = pytrec_eval.RelevanceEvaluator(
-        convert_to_string_id(dev_query_positive_id), {'map_cut', 'ndcg_cut'})
+        convert_to_string_id(dev_query_positive_id), {"map_cut", "ndcg_cut"}
+    )
 
     eval_query_cnt = 0
     result = evaluator.evaluate(convert_to_string_id(prediction))
@@ -480,9 +516,7 @@ def get_arguments():
         default=None,
         type=str,
         required=True,
-        help="Model type selected in the list: " +
-        ", ".join(
-            MSMarcoConfigDict.keys()),
+        help="Model type selected in the list: " + ", ".join(MSMarcoConfigDict.keys()),
     )
 
     parser.add_argument(
@@ -503,8 +537,7 @@ def get_arguments():
 
     parser.add_argument(
         "--end_output_num",
-        default=-
-        1,
+        default=-1,
         type=int,
         help="Stop after this number of data versions has been generated, default run forever",
     )
@@ -579,14 +612,14 @@ def get_arguments():
         action="store_true",
         help="Avoid using CUDA when available",
     )
-    
+
     parser.add_argument(
-        "--local_rank", 
-        type=int, 
-        default=-1, 
+        "--local_rank",
+        type=int,
+        default=-1,
         help="For distributed training: local_rank",
     )
-    
+
     parser.add_argument(
         "--server_ip",
         type=str,
@@ -600,7 +633,7 @@ def get_arguments():
         default="",
         help="For distant debugging.",
     )
-    
+
     parser.add_argument(
         "--inference",
         default=False,
@@ -631,7 +664,8 @@ def set_env(args):
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device(
-            "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+            "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
+        )
         args.n_gpu = torch.cuda.device_count()
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
@@ -692,7 +726,8 @@ def ann_data_gen(args):
                 next_checkpoint,
                 training_positive_id,
                 dev_positive_id,
-                latest_step_num)
+                latest_step_num,
+            )
             if args.inference:
                 break
             logger.info("finished generating ann data number %d", output_num)

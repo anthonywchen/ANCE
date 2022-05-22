@@ -1,5 +1,6 @@
 import sys
-sys.path.append('./')
+
+sys.path.append("./")
 from transformers import AdamW, get_linear_schedule_with_warmup
 from utils.eval_mrr import passage_dist_eval
 from model.models import MSMarcoConfigDict
@@ -26,14 +27,17 @@ logger = logging.getLogger(__name__)
 
 
 def train(args, model, tokenizer, f, train_fn):
-    """ Train the model """
+    """Train the model"""
     tb_writer = None
     if is_first_worker():
         tb_writer = SummaryWriter(log_dir=args.log_dir)
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
-    real_batch_size = args.train_batch_size * args.gradient_accumulation_steps * \
-        (torch.distributed.get_world_size() if args.local_rank != -1 else 1)
+    real_batch_size = (
+        args.train_batch_size
+        * args.gradient_accumulation_steps
+        * (torch.distributed.get_world_size() if args.local_rank != -1 else 1)
+    )
 
     if args.max_steps > 0:
         t_total = args.max_steps
@@ -43,7 +47,14 @@ def train(args, model, tokenizer, f, train_fn):
     # layerwise optimization for lamb
     optimizer_grouped_parameters = []
     layer_optim_params = set()
-    for layer_name in ["roberta.embeddings", "score_out", "downsample1", "downsample2", "downsample3", "embeddingHead"]:
+    for layer_name in [
+        "roberta.embeddings",
+        "score_out",
+        "downsample1",
+        "downsample2",
+        "downsample3",
+        "embeddingHead",
+    ]:
         layer = getattr_recursive(model, layer_name)
         if layer is not None:
             optimizer_grouped_parameters.append({"params": layer.parameters()})
@@ -55,17 +66,23 @@ def train(args, model, tokenizer, f, train_fn):
             for p in layer.parameters():
                 layer_optim_params.add(p)
     optimizer_grouped_parameters.append(
-        {"params": [p for p in model.parameters() if p not in layer_optim_params]})
+        {"params": [p for p in model.parameters() if p not in layer_optim_params]}
+    )
 
     if args.optimizer.lower() == "lamb":
-        optimizer = Lamb(optimizer_grouped_parameters,
-                         lr=args.learning_rate, eps=args.adam_epsilon)
+        optimizer = Lamb(
+            optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon
+        )
     elif args.optimizer.lower() == "adamw":
-        optimizer = AdamW(optimizer_grouped_parameters,
-                          lr=args.learning_rate, eps=args.adam_epsilon)
+        optimizer = AdamW(
+            optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon
+        )
     else:
         raise Exception(
-            "optimizer {0} not recognized! Can only be lamb or adamW".format(args.optimizer))
+            "optimizer {0} not recognized! Can only be lamb or adamW".format(
+                args.optimizer
+            )
+        )
 
     if args.scheduler.lower() == "linear":
         scheduler = get_linear_schedule_with_warmup(
@@ -75,26 +92,35 @@ def train(args, model, tokenizer, f, train_fn):
         scheduler = CosineAnnealingLR(optimizer, t_total, 1e-8)
     else:
         raise Exception(
-            "Scheduler {0} not recognized! Can only be linear or cosine".format(args.scheduler))
+            "Scheduler {0} not recognized! Can only be linear or cosine".format(
+                args.scheduler
+            )
+        )
 
     # Check if saved optimizer or scheduler states exist
-    if os.path.isfile(os.path.join(args.model_name_or_path, "optimizer.pt")) and os.path.isfile(
-        os.path.join(args.model_name_or_path, "scheduler.pt")
-    ) and args.load_optimizer_scheduler:
+    if (
+        os.path.isfile(os.path.join(args.model_name_or_path, "optimizer.pt"))
+        and os.path.isfile(os.path.join(args.model_name_or_path, "scheduler.pt"))
+        and args.load_optimizer_scheduler
+    ):
         # Load in optimizer and scheduler states
-        optimizer.load_state_dict(torch.load(
-            os.path.join(args.model_name_or_path, "optimizer.pt")))
-        scheduler.load_state_dict(torch.load(
-            os.path.join(args.model_name_or_path, "scheduler.pt")))
+        optimizer.load_state_dict(
+            torch.load(os.path.join(args.model_name_or_path, "optimizer.pt"))
+        )
+        scheduler.load_state_dict(
+            torch.load(os.path.join(args.model_name_or_path, "scheduler.pt"))
+        )
 
     if args.fp16:
         try:
             from apex import amp
         except ImportError:
             raise ImportError(
-                "Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
+                "Please install apex from https://www.github.com/nvidia/apex to use fp16 training."
+            )
         model, optimizer = amp.initialize(
-            model, optimizer, opt_level=args.fp16_opt_level)
+            model, optimizer, opt_level=args.fp16_opt_level
+        )
 
     # multi-gpu training (should be after apex fp16 initialization)
     if args.n_gpu > 1:
@@ -103,23 +129,25 @@ def train(args, model, tokenizer, f, train_fn):
     # Distributed training (should be after apex fp16 initialization)
     if args.local_rank != -1:
         model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[
-                args.local_rank], output_device=args.local_rank, find_unused_parameters=True,
+            model,
+            device_ids=[args.local_rank],
+            output_device=args.local_rank,
+            find_unused_parameters=True,
         )
 
     # Train!
     logger.info("***** Running training *****")
     logger.info("  Num Epochs = %d", args.num_train_epochs)
-    logger.info("  Instantaneous batch size per GPU = %d",
-                args.per_gpu_train_batch_size)
+    logger.info(
+        "  Instantaneous batch size per GPU = %d", args.per_gpu_train_batch_size
+    )
     logger.info(
         "  Total train batch size (w. parallel, distributed & accumulation) = %d",
         args.train_batch_size
         * args.gradient_accumulation_steps
         * (torch.distributed.get_world_size() if args.local_rank != -1 else 1),
     )
-    logger.info("  Gradient Accumulation steps = %d",
-                args.gradient_accumulation_steps)
+    logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
     logger.info("  Total optimization steps = %d", t_total)
 
     global_step = 0
@@ -129,34 +157,46 @@ def train(args, model, tokenizer, f, train_fn):
     if os.path.exists(args.model_name_or_path):
         # set global_step to gobal_step of last saved checkpoint from model path
         try:
-            global_step = int(
-                args.model_name_or_path.split("-")[-1].split("/")[0])
-            epochs_trained = global_step // (args.expected_train_size //
-                                             args.gradient_accumulation_steps)
+            global_step = int(args.model_name_or_path.split("-")[-1].split("/")[0])
+            epochs_trained = global_step // (
+                args.expected_train_size // args.gradient_accumulation_steps
+            )
             steps_trained_in_current_epoch = global_step % (
-                args.expected_train_size // args.gradient_accumulation_steps)
+                args.expected_train_size // args.gradient_accumulation_steps
+            )
 
             logger.info(
-                "  Continuing training from checkpoint, will skip to saved global_step")
+                "  Continuing training from checkpoint, will skip to saved global_step"
+            )
             logger.info("  Continuing training from epoch %d", epochs_trained)
+            logger.info("  Continuing training from global step %d", global_step)
             logger.info(
-                "  Continuing training from global step %d", global_step)
-            logger.info("  Will skip the first %d steps in the first epoch",
-                        steps_trained_in_current_epoch)
+                "  Will skip the first %d steps in the first epoch",
+                steps_trained_in_current_epoch,
+            )
         except:
             logger.info("  Start training from a pretrained model")
 
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     train_iterator = trange(
-        epochs_trained, int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0],
+        epochs_trained,
+        int(args.num_train_epochs),
+        desc="Epoch",
+        disable=args.local_rank not in [-1, 0],
     )
     set_seed(args)  # Added here for reproductibility
     for m_epoch in train_iterator:
         f.seek(0)
         sds = StreamingDataset(f, train_fn)
-        epoch_iterator = DataLoader(sds, batch_size=args.per_gpu_train_batch_size, num_workers=1)
-        for step, batch in tqdm(enumerate(epoch_iterator),desc="Iteration",disable=args.local_rank not in [-1,0]):
+        epoch_iterator = DataLoader(
+            sds, batch_size=args.per_gpu_train_batch_size, num_workers=1
+        )
+        for step, batch in tqdm(
+            enumerate(epoch_iterator),
+            desc="Iteration",
+            disable=args.local_rank not in [-1, 0],
+        ):
 
             # Skip past any already trained steps if resuming training
             if steps_trained_in_current_epoch > 0:
@@ -193,38 +233,59 @@ def train(args, model, tokenizer, f, train_fn):
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 if args.fp16:
                     torch.nn.utils.clip_grad_norm_(
-                        amp.master_params(optimizer), args.max_grad_norm)
+                        amp.master_params(optimizer), args.max_grad_norm
+                    )
                 else:
                     torch.nn.utils.clip_grad_norm_(
-                        model.parameters(), args.max_grad_norm)
+                        model.parameters(), args.max_grad_norm
+                    )
 
                 optimizer.step()
                 scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
                 global_step += 1
 
-                if is_first_worker() and args.save_steps > 0 and global_step % args.save_steps == 0:
+                if (
+                    is_first_worker()
+                    and args.save_steps > 0
+                    and global_step % args.save_steps == 0
+                ):
                     # Save model checkpoint
-                    output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+                    output_dir = os.path.join(
+                        args.output_dir, "checkpoint-{}".format(global_step)
+                    )
                     logger.info("Saving model checkpoint to %s", output_dir)
                     if not os.path.exists(output_dir):
                         os.makedirs(output_dir)
-                    model_to_save = (model.module if hasattr(model, "module") else model)  # Take care of distributed/parallel training
+                    model_to_save = (
+                        model.module if hasattr(model, "module") else model
+                    )  # Take care of distributed/parallel training
                     model_to_save.save_pretrained(output_dir)
                     tokenizer.save_pretrained(output_dir)
                     torch.save(args, os.path.join(output_dir, "training_args.bin"))
-                    torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
-                    torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+                    torch.save(
+                        optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt")
+                    )
+                    torch.save(
+                        scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt")
+                    )
                 dist.barrier()
 
                 if args.logging_steps > 0 and global_step % args.logging_steps == 0:
-                    if args.evaluate_during_training and global_step % (args.logging_steps_per_eval*args.logging_steps) == 0:
+                    if (
+                        args.evaluate_during_training
+                        and global_step
+                        % (args.logging_steps_per_eval * args.logging_steps)
+                        == 0
+                    ):
                         model.eval()
-                        reranking_mrr, full_ranking_mrr = passage_dist_eval(args, model, tokenizer)
+                        reranking_mrr, full_ranking_mrr = passage_dist_eval(
+                            args, model, tokenizer
+                        )
                         if is_first_worker():
                             mrr_dict = {
                                 "reranking": float(reranking_mrr),
-                                "full_raking": float(full_ranking_mrr)
+                                "full_raking": float(full_ranking_mrr),
                             }
                             tb_writer.add_scalars("mrr", mrr_dict, global_step)
 
@@ -266,7 +327,7 @@ def load_stuff(model_type, args):
         torch.distributed.barrier()
 
     configObj = MSMarcoConfigDict[model_type]
-    model_args = type('', (), {})()
+    model_args = type("", (), {})()
     model_args.use_mean = configObj.use_mean
     config = configObj.config_class.from_pretrained(
         args.config_name if args.config_name else args.model_name_or_path,
@@ -286,8 +347,7 @@ def load_stuff(model_type, args):
         cache_dir=args.cache_dir if args.cache_dir else None,
         model_argobj=model_args,
     )
-    #model = configObj.model_class(config,model_argobj=model_args)
-    
+    # model = configObj.model_class(config,model_argobj=model_args)
 
     if args.local_rank == 0:
         # Make sure only the first process in distributed training will download model & vocab
@@ -341,9 +401,9 @@ def get_arguments():
 
     # Other parameters
     parser.add_argument(
-        "--config_name", 
-        default="", 
-        type=str, 
+        "--config_name",
+        default="",
+        type=str,
         help="Pretrained config name or path if not the same as model_name",
     )
 
@@ -370,26 +430,26 @@ def get_arguments():
     )
 
     parser.add_argument(
-        "--do_train", 
+        "--do_train",
         action="store_true",
         help="Whether to run training.",
     )
 
     parser.add_argument(
-        "--do_eval", 
+        "--do_eval",
         action="store_true",
         help="Whether to run eval on the dev set.",
     )
 
     parser.add_argument(
-        "--evaluate_during_training", 
-        action="store_true", 
+        "--evaluate_during_training",
+        action="store_true",
         help="Rul evaluation during training at each logging step.",
     )
 
     parser.add_argument(
-        "--do_lower_case", 
-        action="store_true", 
+        "--do_lower_case",
+        action="store_true",
         help="Set this flag if you are using an uncased model.",
     )
 
@@ -422,16 +482,16 @@ def get_arguments():
     )
 
     parser.add_argument(
-        "--per_gpu_train_batch_size", 
-        default=8, 
-        type=int, 
+        "--per_gpu_train_batch_size",
+        default=8,
+        type=int,
         help="Batch size per GPU/CPU for training.",
     )
 
     parser.add_argument(
-        "--per_gpu_eval_batch_size", 
-        default=8, 
-        type=int, 
+        "--per_gpu_eval_batch_size",
+        default=8,
+        type=int,
         help="Batch size per GPU/CPU for evaluation.",
     )
 
@@ -443,37 +503,37 @@ def get_arguments():
     )
 
     parser.add_argument(
-        "--learning_rate", 
+        "--learning_rate",
         default=5e-5,
-        type=float, 
+        type=float,
         help="The initial learning rate for Adam.",
     )
 
     parser.add_argument(
-        "--weight_decay", 
+        "--weight_decay",
         default=0.0,
-        type=float, 
+        type=float,
         help="Weight decay if we apply some.",
     )
 
     parser.add_argument(
-        "--adam_epsilon", 
+        "--adam_epsilon",
         default=1e-8,
-        type=float, 
+        type=float,
         help="Epsilon for Adam optimizer.",
     )
 
     parser.add_argument(
-        "--max_grad_norm", 
+        "--max_grad_norm",
         default=1.0,
-        type=float, 
+        type=float,
         help="Max gradient norm.",
     )
 
     parser.add_argument(
-        "--num_train_epochs", 
-        default=3.0, 
-        type=float, 
+        "--num_train_epochs",
+        default=3.0,
+        type=float,
         help="Total number of training epochs to perform.",
     )
 
@@ -486,28 +546,28 @@ def get_arguments():
 
     parser.add_argument(
         "--warmup_steps",
-         default=0, 
-         type=int,
-         help="Linear warmup over warmup_steps.",
+        default=0,
+        type=int,
+        help="Linear warmup over warmup_steps.",
     )
 
     parser.add_argument(
-        "--logging_steps", 
+        "--logging_steps",
         type=int,
-        default=500, 
+        default=500,
         help="Log every X updates steps.",
     )
 
     parser.add_argument(
-        "--logging_steps_per_eval", 
+        "--logging_steps_per_eval",
         type=int,
-        default=10, 
+        default=10,
         help="Eval every X logging steps.",
     )
 
     parser.add_argument(
-        "--save_steps", 
-        type=int, 
+        "--save_steps",
+        type=int,
         default=500,
         help="Save checkpoint every X updates steps.",
     )
@@ -519,26 +579,26 @@ def get_arguments():
     )
 
     parser.add_argument(
-        "--no_cuda", 
+        "--no_cuda",
         action="store_true",
         help="Avoid using CUDA when available",
     )
 
     parser.add_argument(
-        "--overwrite_output_dir", 
-        action="store_true", 
+        "--overwrite_output_dir",
+        action="store_true",
         help="Overwrite the content of the output directory",
     )
 
     parser.add_argument(
-        "--overwrite_cache", 
-        action="store_true", 
+        "--overwrite_cache",
+        action="store_true",
         help="Overwrite the cached training and evaluation sets",
     )
 
     parser.add_argument(
-        "--seed", 
-        type=int, 
+        "--seed",
+        type=int,
         default=42,
         help="random seed for initialization",
     )
@@ -572,23 +632,23 @@ def get_arguments():
     )
 
     parser.add_argument(
-        "--local_rank", 
-        type=int, 
+        "--local_rank",
+        type=int,
         default=-1,
         help="For distributed training: local_rank",
     )
 
     parser.add_argument(
-        "--server_ip", 
-        type=str, 
+        "--server_ip",
+        type=str,
         default="",
         help="For distant debugging.",
     )
 
     parser.add_argument(
-        "--server_port", 
+        "--server_port",
         type=str,
-        default="", 
+        default="",
         help="For distant debugging.",
     )
 
@@ -617,13 +677,15 @@ def set_env(args):
 
         print("Waiting for debugger attach")
         ptvsd.enable_attach(
-            address=(args.server_ip, args.server_port), redirect_output=True)
+            address=(args.server_ip, args.server_port), redirect_output=True
+        )
         ptvsd.wait_for_attach()
 
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device(
-            "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+            "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
+        )
         args.n_gpu = torch.cuda.device_count()
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
@@ -677,18 +739,26 @@ def evaluation(args, model, tokenizer):
     # Evaluation
     results = {}
     if args.do_eval:
-        model_dir = args.model_name_or_path if args.model_name_or_path else args.output_dir
+        model_dir = (
+            args.model_name_or_path if args.model_name_or_path else args.output_dir
+        )
 
         checkpoints = [model_dir]
 
         for checkpoint in checkpoints:
             global_step = checkpoint.split("-")[-1] if len(checkpoints) > 1 else ""
-            prefix = checkpoint.split("/")[-1] if checkpoint.find("checkpoint") != -1 else ""
+            prefix = (
+                checkpoint.split("/")[-1] if checkpoint.find("checkpoint") != -1 else ""
+            )
 
             model.eval()
             reranking_mrr, full_ranking_mrr = passage_dist_eval(args, model, tokenizer)
             if is_first_worker():
-                print("Reranking/Full ranking mrr: {0}/{1}".format(str(reranking_mrr), str(full_ranking_mrr)))
+                print(
+                    "Reranking/Full ranking mrr: {0}/{1}".format(
+                        str(reranking_mrr), str(full_ranking_mrr)
+                    )
+                )
             dist.barrier()
     return results
 
@@ -705,7 +775,9 @@ def main():
         def train_fn(line, i):
             return configObj.process_fn(line, i, tokenizer, args)
 
-        with open(args.data_dir+"/triples.train.small.tsv", encoding="utf-8-sig") as f:
+        with open(
+            args.data_dir + "/triples.train.small.tsv", encoding="utf-8-sig"
+        ) as f:
             train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
             global_step, tr_loss = train(args, model, tokenizer, f, train_fn)
             logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)

@@ -1,6 +1,7 @@
 from os.path import join
 import sys
-sys.path += ['../']
+
+sys.path += ["../"]
 import argparse
 import glob
 import json
@@ -9,7 +10,8 @@ import os
 import random
 import numpy as np
 import torch
-torch.multiprocessing.set_sharing_strategy('file_system')
+
+torch.multiprocessing.set_sharing_strategy("file_system")
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import torch.distributed as dist
@@ -17,7 +19,7 @@ from torch import nn
 import torch.nn.functional as F
 from model.models import MSMarcoConfigDict, ALL_MODELS
 from utils.lamb import Lamb
-import random 
+import random
 import transformers
 from transformers import (
     AdamW,
@@ -30,48 +32,67 @@ from transformers import glue_processors as processors
 import copy
 from torch import nn
 import pickle
+
 try:
     from torch.utils.tensorboard import SummaryWriter
 except ImportError:
     from tensorboardX import SummaryWriter
 import pandas as pd
+
 logger = logging.getLogger(__name__)
 from utils.util import (
-    StreamingDataset, 
-    EmbeddingCache, 
-    get_checkpoint_no, 
+    StreamingDataset,
+    EmbeddingCache,
+    get_checkpoint_no,
     get_latest_ann_data,
     set_seed,
     is_first_worker,
 )
-from data.DPR_data import GetTrainingDataProcessingFn, GetTripletTrainingDataProcessingFn
+from data.DPR_data import (
+    GetTrainingDataProcessingFn,
+    GetTripletTrainingDataProcessingFn,
+)
 from utils.dpr_utils import (
-    load_states_from_checkpoint, 
-    get_model_obj, 
-    CheckpointState, 
-    get_optimizer, 
-    all_gather_list
+    load_states_from_checkpoint,
+    get_model_obj,
+    CheckpointState,
+    get_optimizer,
+    all_gather_list,
 )
 
 
 def train(args, model, tokenizer, query_cache, passage_cache):
-    """ Train the model """
+    """Train the model"""
     logger.info("Training/evaluation parameters %s", args)
     tb_writer = None
     if is_first_worker():
         tb_writer = SummaryWriter(log_dir=args.log_dir)
 
-    args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu) #nll loss for query
-    real_batch_size = args.train_batch_size * args.gradient_accumulation_steps * (torch.distributed.get_world_size() if args.local_rank != -1 else 1)
-    
-    optimizer = get_optimizer(args, model, weight_decay=args.weight_decay,)
+    args.train_batch_size = args.per_gpu_train_batch_size * max(
+        1, args.n_gpu
+    )  # nll loss for query
+    real_batch_size = (
+        args.train_batch_size
+        * args.gradient_accumulation_steps
+        * (torch.distributed.get_world_size() if args.local_rank != -1 else 1)
+    )
+
+    optimizer = get_optimizer(
+        args,
+        model,
+        weight_decay=args.weight_decay,
+    )
 
     if args.fp16:
         try:
             from apex import amp
         except ImportError:
-            raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use fp16 training.")
-        model, optimizer = amp.initialize(model, optimizer, opt_level=args.fp16_opt_level)
+            raise ImportError(
+                "Please install apex from https://www.github.com/nvidia/apex to use fp16 training."
+            )
+        model, optimizer = amp.initialize(
+            model, optimizer, opt_level=args.fp16_opt_level
+        )
 
     # multi-gpu training (should be after apex fp16 initialization)
     if args.n_gpu > 1:
@@ -80,13 +101,18 @@ def train(args, model, tokenizer, query_cache, passage_cache):
     # Distributed training (should be after apex fp16 initialization)
     if args.local_rank != -1:
         model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[args.local_rank], output_device=args.local_rank, find_unused_parameters=True,
+            model,
+            device_ids=[args.local_rank],
+            output_device=args.local_rank,
+            find_unused_parameters=True,
         )
 
     # Train!
     logger.info("***** Running training *****")
     logger.info("  Max steps = %d", args.max_steps)
-    logger.info("  Instantaneous batch size per GPU = %d", args.per_gpu_train_batch_size)
+    logger.info(
+        "  Instantaneous batch size per GPU = %d", args.per_gpu_train_batch_size
+    )
     logger.info(
         "  Total train batch size (w. parallel, distributed & accumulation) = %d",
         args.train_batch_size
@@ -108,84 +134,150 @@ def train(args, model, tokenizer, query_cache, passage_cache):
     iter_count = 0
 
     scheduler = get_linear_schedule_with_warmup(
-        optimizer, num_warmup_steps=args.warmup_steps, num_training_steps= args.max_steps
+        optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=args.max_steps
     )
 
     global_step = 0
     if args.model_name_or_path != "bert-base-uncased":
         saved_state = load_states_from_checkpoint(args.model_name_or_path)
         global_step = _load_saved_state(model, optimizer, scheduler, saved_state)
-        logger.info("  Continuing training from checkpoint, will skip to saved global_step")
+        logger.info(
+            "  Continuing training from checkpoint, will skip to saved global_step"
+        )
         logger.info("  Continuing training from global step %d", global_step)
 
-
         nq_dev_nll_loss, nq_correct_ratio = evaluate_dev(args, model, passage_cache)
-        dev_nll_loss_trivia, correct_ratio_trivia = evaluate_dev(args, model, passage_cache, "-trivia")
+        dev_nll_loss_trivia, correct_ratio_trivia = evaluate_dev(
+            args, model, passage_cache, "-trivia"
+        )
         if is_first_worker():
-            tb_writer.add_scalar("dev_nll_loss/dev_nll_loss", nq_dev_nll_loss, global_step)
-            tb_writer.add_scalar("dev_nll_loss/correct_ratio", nq_correct_ratio, global_step)
-            tb_writer.add_scalar("dev_nll_loss/dev_nll_loss_trivia", dev_nll_loss_trivia, global_step)
-            tb_writer.add_scalar("dev_nll_loss/correct_ratio_trivia", correct_ratio_trivia, global_step)
+            tb_writer.add_scalar(
+                "dev_nll_loss/dev_nll_loss", nq_dev_nll_loss, global_step
+            )
+            tb_writer.add_scalar(
+                "dev_nll_loss/correct_ratio", nq_correct_ratio, global_step
+            )
+            tb_writer.add_scalar(
+                "dev_nll_loss/dev_nll_loss_trivia", dev_nll_loss_trivia, global_step
+            )
+            tb_writer.add_scalar(
+                "dev_nll_loss/correct_ratio_trivia", correct_ratio_trivia, global_step
+            )
 
     while global_step < args.max_steps:
 
-        if step % args.gradient_accumulation_steps == 0 and global_step % args.logging_steps == 0:
+        if (
+            step % args.gradient_accumulation_steps == 0
+            and global_step % args.logging_steps == 0
+        ):
 
             if args.num_epoch == 0:
                 # check if new ann training data is availabe
                 ann_no, ann_path, ndcg_json = get_latest_ann_data(args.ann_dir)
                 if ann_path is not None and ann_no != last_ann_no:
                     logger.info("Training on new add data at %s", ann_path)
-                    with open(ann_path, 'r') as f:
+                    with open(ann_path, "r") as f:
                         ann_training_data = f.readlines()
                     logger.info("Training data line count: %d", len(ann_training_data))
-                    ann_training_data = [l for l in ann_training_data if len(l.split('\t')[2].split(',')) > 1]
-                    logger.info("Filtered training data line count: %d", len(ann_training_data))
-                    ann_checkpoint_path = ndcg_json['checkpoint']
+                    ann_training_data = [
+                        l
+                        for l in ann_training_data
+                        if len(l.split("\t")[2].split(",")) > 1
+                    ]
+                    logger.info(
+                        "Filtered training data line count: %d", len(ann_training_data)
+                    )
+                    ann_checkpoint_path = ndcg_json["checkpoint"]
                     ann_checkpoint_no = get_checkpoint_no(ann_checkpoint_path)
 
-                    aligned_size = (len(ann_training_data) // args.world_size) * args.world_size
+                    aligned_size = (
+                        len(ann_training_data) // args.world_size
+                    ) * args.world_size
                     ann_training_data = ann_training_data[:aligned_size]
 
                     logger.info("Total ann queries: %d", len(ann_training_data))
                     if args.triplet:
-                        train_dataset = StreamingDataset(ann_training_data, GetTripletTrainingDataProcessingFn(args, query_cache, passage_cache))
-                        train_dataloader = DataLoader(train_dataset, batch_size=args.train_batch_size)
+                        train_dataset = StreamingDataset(
+                            ann_training_data,
+                            GetTripletTrainingDataProcessingFn(
+                                args, query_cache, passage_cache
+                            ),
+                        )
+                        train_dataloader = DataLoader(
+                            train_dataset, batch_size=args.train_batch_size
+                        )
                     else:
-                        train_dataset = StreamingDataset(ann_training_data, GetTrainingDataProcessingFn(args, query_cache, passage_cache))
-                        train_dataloader = DataLoader(train_dataset, batch_size=args.train_batch_size*2)
+                        train_dataset = StreamingDataset(
+                            ann_training_data,
+                            GetTrainingDataProcessingFn(
+                                args, query_cache, passage_cache
+                            ),
+                        )
+                        train_dataloader = DataLoader(
+                            train_dataset, batch_size=args.train_batch_size * 2
+                        )
                     train_dataloader_iter = iter(train_dataloader)
 
                     # re-warmup
                     if not args.single_warmup:
                         scheduler = get_linear_schedule_with_warmup(
-                            optimizer, num_warmup_steps=args.warmup_steps, num_training_steps= len(ann_training_data)
+                            optimizer,
+                            num_warmup_steps=args.warmup_steps,
+                            num_training_steps=len(ann_training_data),
                         )
 
                     if args.local_rank != -1:
                         dist.barrier()
-            
+
                     if is_first_worker():
                         # add ndcg at checkpoint step used instead of current step
-                        tb_writer.add_scalar("retrieval_accuracy/top20_nq", ndcg_json['top20'], ann_checkpoint_no)
-                        tb_writer.add_scalar("retrieval_accuracy/top100_nq", ndcg_json['top100'], ann_checkpoint_no)
-                        if 'top20_trivia' in ndcg_json:
-                            tb_writer.add_scalar("retrieval_accuracy/top20_trivia", ndcg_json['top20_trivia'], ann_checkpoint_no)
-                            tb_writer.add_scalar("retrieval_accuracy/top100_trivia", ndcg_json['top100_trivia'], ann_checkpoint_no)
+                        tb_writer.add_scalar(
+                            "retrieval_accuracy/top20_nq",
+                            ndcg_json["top20"],
+                            ann_checkpoint_no,
+                        )
+                        tb_writer.add_scalar(
+                            "retrieval_accuracy/top100_nq",
+                            ndcg_json["top100"],
+                            ann_checkpoint_no,
+                        )
+                        if "top20_trivia" in ndcg_json:
+                            tb_writer.add_scalar(
+                                "retrieval_accuracy/top20_trivia",
+                                ndcg_json["top20_trivia"],
+                                ann_checkpoint_no,
+                            )
+                            tb_writer.add_scalar(
+                                "retrieval_accuracy/top100_trivia",
+                                ndcg_json["top100_trivia"],
+                                ann_checkpoint_no,
+                            )
                         if last_ann_no != -1:
-                            tb_writer.add_scalar("epoch", last_ann_no, global_step-1)
+                            tb_writer.add_scalar("epoch", last_ann_no, global_step - 1)
                         tb_writer.add_scalar("epoch", ann_no, global_step)
                     last_ann_no = ann_no
             elif step == 0:
                 train_data_path = os.path.join(args.data_dir, "train-data")
-                with open(train_data_path, 'r') as f:
+                with open(train_data_path, "r") as f:
                     training_data = f.readlines()
                 if args.triplet:
-                    train_dataset = StreamingDataset(training_data, GetTripletTrainingDataProcessingFn(args, query_cache, passage_cache))
-                    train_dataloader = DataLoader(train_dataset, batch_size=args.train_batch_size)
+                    train_dataset = StreamingDataset(
+                        training_data,
+                        GetTripletTrainingDataProcessingFn(
+                            args, query_cache, passage_cache
+                        ),
+                    )
+                    train_dataloader = DataLoader(
+                        train_dataset, batch_size=args.train_batch_size
+                    )
                 else:
-                    train_dataset = StreamingDataset(training_data, GetTrainingDataProcessingFn(args, query_cache, passage_cache))
-                    train_dataloader = DataLoader(train_dataset, batch_size=args.train_batch_size*2)
+                    train_dataset = StreamingDataset(
+                        training_data,
+                        GetTrainingDataProcessingFn(args, query_cache, passage_cache),
+                    )
+                    train_dataloader = DataLoader(
+                        train_dataset, batch_size=args.train_batch_size * 2
+                    )
                 all_batch = [b for b in train_dataloader]
                 logger.info("Total batch count: %d", len(all_batch))
                 train_dataloader_iter = iter(train_dataloader)
@@ -197,22 +289,34 @@ def train(args, model, tokenizer, query_cache, passage_cache):
             if args.num_epoch != 0:
                 iter_count += 1
                 if is_first_worker():
-                    tb_writer.add_scalar("epoch", iter_count-1, global_step-1)
+                    tb_writer.add_scalar("epoch", iter_count - 1, global_step - 1)
                     tb_writer.add_scalar("epoch", iter_count, global_step)
             nq_dev_nll_loss, nq_correct_ratio = evaluate_dev(args, model, passage_cache)
-            dev_nll_loss_trivia, correct_ratio_trivia = evaluate_dev(args, model, passage_cache, "-trivia")
+            dev_nll_loss_trivia, correct_ratio_trivia = evaluate_dev(
+                args, model, passage_cache, "-trivia"
+            )
             if is_first_worker():
-                tb_writer.add_scalar("dev_nll_loss/dev_nll_loss", nq_dev_nll_loss, global_step)
-                tb_writer.add_scalar("dev_nll_loss/correct_ratio", nq_correct_ratio, global_step)
-                tb_writer.add_scalar("dev_nll_loss/dev_nll_loss_trivia", dev_nll_loss_trivia, global_step)
-                tb_writer.add_scalar("dev_nll_loss/correct_ratio_trivia", correct_ratio_trivia, global_step)
+                tb_writer.add_scalar(
+                    "dev_nll_loss/dev_nll_loss", nq_dev_nll_loss, global_step
+                )
+                tb_writer.add_scalar(
+                    "dev_nll_loss/correct_ratio", nq_correct_ratio, global_step
+                )
+                tb_writer.add_scalar(
+                    "dev_nll_loss/dev_nll_loss_trivia", dev_nll_loss_trivia, global_step
+                )
+                tb_writer.add_scalar(
+                    "dev_nll_loss/correct_ratio_trivia",
+                    correct_ratio_trivia,
+                    global_step,
+                )
             train_dataloader_iter = iter(train_dataloader)
             batch = next(train_dataloader_iter)
             dist.barrier()
 
         if args.num_epoch != 0 and iter_count > args.num_epoch:
             break
-        
+
         step += 1
         if args.triplet:
             loss = triplet_fwd_pass(args, model, batch)
@@ -227,12 +331,14 @@ def train(args, model, tokenizer, query_cache, passage_cache):
                 loss.backward()
             else:
                 with model.no_sync():
-                    loss.backward()          
+                    loss.backward()
 
         tr_loss += loss.item()
         if step % args.gradient_accumulation_steps == 0:
             if args.fp16:
-                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(
+                    amp.master_params(optimizer), args.max_grad_norm
+                )
             else:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
@@ -254,7 +360,11 @@ def train(args, model, tokenizer, query_cache, passage_cache):
                         tb_writer.add_scalar(key, value, global_step)
                     logger.info(json.dumps({**logs, **{"step": global_step}}))
 
-            if is_first_worker() and args.save_steps > 0 and global_step % args.save_steps == 0:
+            if (
+                is_first_worker()
+                and args.save_steps > 0
+                and global_step % args.save_steps == 0
+            ):
                 _save_checkpoint(args, model, optimizer, scheduler, global_step)
 
     if args.local_rank == -1 or torch.distributed.get_rank() == 0:
@@ -265,10 +375,12 @@ def train(args, model, tokenizer, query_cache, passage_cache):
 
 def evaluate_dev(args, model, passage_cache, source=""):
 
-    dev_query_collection_path = os.path.join(args.data_dir, "dev-query{}".format(source))
+    dev_query_collection_path = os.path.join(
+        args.data_dir, "dev-query{}".format(source)
+    )
     dev_query_cache = EmbeddingCache(dev_query_collection_path)
 
-    logger.info('NLL validation ...')
+    logger.info("NLL validation ...")
     model.eval()
 
     log_result_step = 100
@@ -278,29 +390,36 @@ def evaluate_dev(args, model, passage_cache, source=""):
 
     with dev_query_cache:
         dev_data_path = os.path.join(args.data_dir, "dev-data{}".format(source))
-        with open(dev_data_path, 'r') as f:
+        with open(dev_data_path, "r") as f:
             dev_data = f.readlines()
-        dev_dataset = StreamingDataset(dev_data, GetTrainingDataProcessingFn(args, dev_query_cache, passage_cache, shuffle=False))
-        dev_dataloader = DataLoader(dev_dataset, batch_size=args.train_batch_size*2)
+        dev_dataset = StreamingDataset(
+            dev_data,
+            GetTrainingDataProcessingFn(
+                args, dev_query_cache, passage_cache, shuffle=False
+            ),
+        )
+        dev_dataloader = DataLoader(dev_dataset, batch_size=args.train_batch_size * 2)
 
         for i, batch in enumerate(dev_dataloader):
             loss, correct_cnt = do_biencoder_fwd_pass(args, model, batch)
-            loss.backward() # get CUDA oom without this
+            loss.backward()  # get CUDA oom without this
             model.zero_grad()
             total_loss += loss.item()
             total_correct_predictions += correct_cnt
             batches += 1
             if (i + 1) % log_result_step == 0:
-                logger.info('Eval step: %d , loss=%f ', i, loss.item())
+                logger.info("Eval step: %d , loss=%f ", i, loss.item())
 
     total_loss = total_loss / batches
     total_samples = batches * args.train_batch_size * torch.distributed.get_world_size()
     correct_ratio = float(total_correct_predictions / total_samples)
-    logger.info('NLL Validation: loss = %f. correct prediction ratio  %d/%d ~  %f', total_loss,
-                total_correct_predictions,
-                total_samples,
-                correct_ratio
-                )
+    logger.info(
+        "NLL Validation: loss = %f. correct prediction ratio  %d/%d ~  %f",
+        total_loss,
+        total_correct_predictions,
+        total_samples,
+        correct_ratio,
+    )
 
     model.train()
     return total_loss, correct_ratio
@@ -308,9 +427,14 @@ def evaluate_dev(args, model, passage_cache, source=""):
 
 def triplet_fwd_pass(args, model, batch):
     batch = tuple(t.to(args.device) for t in batch)
-    inputs = {"query_ids": batch[0].long(), "attention_mask_q": batch[1].long(), 
-                "input_ids_a": batch[3].long(), "attention_mask_a": batch[4].long(),
-                "input_ids_b": batch[6].long(), "attention_mask_b": batch[7].long()}
+    inputs = {
+        "query_ids": batch[0].long(),
+        "attention_mask_q": batch[1].long(),
+        "input_ids_a": batch[3].long(),
+        "attention_mask_a": batch[4].long(),
+        "input_ids_b": batch[6].long(),
+        "attention_mask_b": batch[7].long(),
+    }
     loss = model(**inputs)[0]
 
     if args.n_gpu > 1:
@@ -321,21 +445,28 @@ def triplet_fwd_pass(args, model, batch):
     return loss
 
 
-def do_biencoder_fwd_pass(args, model, batch) -> (
-        torch.Tensor, int):
+def do_biencoder_fwd_pass(args, model, batch) -> (torch.Tensor, int):
 
     batch = tuple(t.to(args.device) for t in batch)
-    inputs = {"query_ids": batch[0][::2].long(), "attention_mask_q": batch[1][::2].long(), 
-                "input_ids_a": batch[3].long(), "attention_mask_a": batch[4].long()}
+    inputs = {
+        "query_ids": batch[0][::2].long(),
+        "attention_mask_q": batch[1][::2].long(),
+        "input_ids_a": batch[3].long(),
+        "attention_mask_a": batch[4].long(),
+    }
 
     local_q_vector, local_ctx_vectors = model(**inputs)
 
-    q_vector_to_send = torch.empty_like(local_q_vector).cpu().copy_(local_q_vector).detach_()
-    ctx_vector_to_send = torch.empty_like(local_ctx_vectors).cpu().copy_(local_ctx_vectors).detach_()
+    q_vector_to_send = (
+        torch.empty_like(local_q_vector).cpu().copy_(local_q_vector).detach_()
+    )
+    ctx_vector_to_send = (
+        torch.empty_like(local_ctx_vectors).cpu().copy_(local_ctx_vectors).detach_()
+    )
 
     global_question_ctx_vectors = all_gather_list(
-        [q_vector_to_send, ctx_vector_to_send],
-        max_size=150000)
+        [q_vector_to_send, ctx_vector_to_send], max_size=150000
+    )
 
     global_q_vector = []
     global_ctxs_vector = []
@@ -358,11 +489,16 @@ def do_biencoder_fwd_pass(args, model, batch) -> (
         q_num = global_q_vector.size(0)
         scores = scores.view(q_num, -1)
     softmax_scores = F.log_softmax(scores, dim=1)
-    positive_idx_per_question = [i*2 for i in range(q_num)]
-    loss = F.nll_loss(softmax_scores, torch.tensor(positive_idx_per_question).to(softmax_scores.device),
-                      reduction='mean')
+    positive_idx_per_question = [i * 2 for i in range(q_num)]
+    loss = F.nll_loss(
+        softmax_scores,
+        torch.tensor(positive_idx_per_question).to(softmax_scores.device),
+        reduction="mean",
+    )
     max_score, max_idxs = torch.max(softmax_scores, 1)
-    correct_predictions_count = (max_idxs == torch.tensor(positive_idx_per_question).to(max_idxs.device)).sum()
+    correct_predictions_count = (
+        max_idxs == torch.tensor(positive_idx_per_question).to(max_idxs.device)
+    ).sum()
 
     is_correct = correct_predictions_count.sum().item()
 
@@ -373,32 +509,38 @@ def do_biencoder_fwd_pass(args, model, batch) -> (
 
     return loss, is_correct
 
+
 def _save_checkpoint(args, model, optimizer, scheduler, step: int) -> str:
     offset = step
     epoch = 0
     model_to_save = get_model_obj(model)
-    cp = os.path.join(args.output_dir, 'checkpoint-' + str(offset))
+    cp = os.path.join(args.output_dir, "checkpoint-" + str(offset))
 
     meta_params = {}
 
-    state = CheckpointState(model_to_save.state_dict(),
-                            optimizer.state_dict(),
-                            scheduler.state_dict(),
-                            offset,
-                            epoch, meta_params
-                            )
+    state = CheckpointState(
+        model_to_save.state_dict(),
+        optimizer.state_dict(),
+        scheduler.state_dict(),
+        offset,
+        epoch,
+        meta_params,
+    )
     torch.save(state._asdict(), cp)
-    logger.info('Saved checkpoint at %s', cp)
+    logger.info("Saved checkpoint at %s", cp)
     return cp
+
 
 def _load_saved_state(model, optimizer, scheduler, saved_state: CheckpointState):
     epoch = saved_state.epoch
     step = saved_state.offset
-    logger.info('Loading checkpoint @ step=%s', step)
+    logger.info("Loading checkpoint @ step=%s", step)
 
     model_to_load = get_model_obj(model)
-    logger.info('Loading saved model state ...')
-    model_to_load.load_state_dict(saved_state.model_dict)  # set strict=False if you use extra projection
+    logger.info("Loading saved model state ...")
+    model_to_load.load_state_dict(
+        saved_state.model_dict
+    )  # set strict=False if you use extra projection
 
     return step
 
@@ -433,14 +575,16 @@ def get_arguments():
         default=None,
         type=str,
         required=True,
-        help="Path to pre-trained model or shortcut name selected in the list: " + ", ".join(ALL_MODELS),
+        help="Path to pre-trained model or shortcut name selected in the list: "
+        + ", ".join(ALL_MODELS),
     )
     parser.add_argument(
         "--task_name",
         default=None,
         type=str,
         required=True,
-        help="The name of the task to train selected in the list: " + ", ".join(processors.keys()),
+        help="The name of the task to train selected in the list: "
+        + ", ".join(processors.keys()),
     )
     parser.add_argument(
         "--output_dir",
@@ -459,7 +603,10 @@ def get_arguments():
 
     # Other parameters
     parser.add_argument(
-        "--config_name", default="", type=str, help="Pretrained config name or path if not the same as model_name",
+        "--config_name",
+        default="",
+        type=str,
+        help="Pretrained config name or path if not the same as model_name",
     )
     parser.add_argument(
         "--tokenizer_name",
@@ -489,7 +636,9 @@ def get_arguments():
         "than this will be truncated, sequences shorter will be padded.",
     )
 
-    parser.add_argument("--triplet", default = False, action="store_true", help="Whether to run training.")
+    parser.add_argument(
+        "--triplet", default=False, action="store_true", help="Whether to run training."
+    )
     parser.add_argument(
         "--log_dir",
         default=None,
@@ -505,7 +654,10 @@ def get_arguments():
     )
 
     parser.add_argument(
-        "--per_gpu_train_batch_size", default=8, type=int, help="Batch size per GPU/CPU for training.",
+        "--per_gpu_train_batch_size",
+        default=8,
+        type=int,
+        help="Batch size per GPU/CPU for training.",
     )
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -513,22 +665,46 @@ def get_arguments():
         default=1,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
-    parser.add_argument("--learning_rate", default=5e-5, type=float, help="The initial learning rate for Adam.")
-    parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay if we apply some.")
-    parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")
-    parser.add_argument("--max_grad_norm", default=2.0, type=float, help="Max gradient norm.")
+    parser.add_argument(
+        "--learning_rate",
+        default=5e-5,
+        type=float,
+        help="The initial learning rate for Adam.",
+    )
+    parser.add_argument(
+        "--weight_decay", default=0.0, type=float, help="Weight decay if we apply some."
+    )
+    parser.add_argument(
+        "--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer."
+    )
+    parser.add_argument(
+        "--max_grad_norm", default=2.0, type=float, help="Max gradient norm."
+    )
     parser.add_argument(
         "--max_steps",
         default=300000,
         type=int,
         help="If > 0: set total number of training steps to perform",
     )
-    parser.add_argument("--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps.")
-    parser.add_argument("--logging_steps", type=int, default=500, help="Log every X updates steps.")
-    parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every X updates steps.")
+    parser.add_argument(
+        "--warmup_steps", default=0, type=int, help="Linear warmup over warmup_steps."
+    )
+    parser.add_argument(
+        "--logging_steps", type=int, default=500, help="Log every X updates steps."
+    )
+    parser.add_argument(
+        "--save_steps",
+        type=int,
+        default=500,
+        help="Save checkpoint every X updates steps.",
+    )
 
-    parser.add_argument("--no_cuda", action="store_true", help="Avoid using CUDA when available")
-    parser.add_argument("--seed", type=int, default=42, help="random seed for initialization")
+    parser.add_argument(
+        "--no_cuda", action="store_true", help="Avoid using CUDA when available"
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="random seed for initialization"
+    )
 
     parser.add_argument(
         "--fp16",
@@ -547,22 +723,31 @@ def get_arguments():
 
     parser.add_argument(
         "--load_optimizer_scheduler",
-        default = False,
+        default=False,
         action="store_true",
         help="load scheduler from checkpoint or not",
     )
 
     parser.add_argument(
         "--single_warmup",
-        default = True,
+        default=True,
         action="store_true",
         help="use single or re-warmup",
     )
 
     # ----------------- End of Doc Ranking HyperParam ------------------
-    parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
-    parser.add_argument("--server_ip", type=str, default="", help="For distant debugging.")
-    parser.add_argument("--server_port", type=str, default="", help="For distant debugging.")
+    parser.add_argument(
+        "--local_rank",
+        type=int,
+        default=-1,
+        help="For distributed training: local_rank",
+    )
+    parser.add_argument(
+        "--server_ip", type=str, default="", help="For distant debugging."
+    )
+    parser.add_argument(
+        "--server_port", type=str, default="", help="For distant debugging."
+    )
 
     args = parser.parse_args()
 
@@ -576,12 +761,16 @@ def set_env(args):
         import ptvsd
 
         print("Waiting for debugger attach")
-        ptvsd.enable_attach(address=(args.server_ip, args.server_port), redirect_output=True)
+        ptvsd.enable_attach(
+            address=(args.server_ip, args.server_port), redirect_output=True
+        )
         ptvsd.wait_for_attach()
 
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
-        device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+        device = torch.device(
+            "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
+        )
         args.n_gpu = torch.cuda.device_count()
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
@@ -615,7 +804,6 @@ def load_model(args):
     args.output_mode = "classification"
     label_list = ["0", "1"]
     num_labels = len(label_list)
-
 
     # store args
     if args.local_rank != -1:
@@ -661,7 +849,7 @@ def main():
     with query_cache, passage_cache:
         global_step = train(args, model, tokenizer, query_cache, passage_cache)
         logger.info(" global_step = %s", global_step)
-    
+
     if args.local_rank != -1:
         dist.barrier()
 
