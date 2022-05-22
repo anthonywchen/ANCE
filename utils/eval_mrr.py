@@ -20,11 +20,14 @@ def embedding_inference(args, path, model, fn, bz, num_workers=2, is_query=True)
     loader = DataLoader(sds, batch_size=bz, num_workers=1)
     emb_list, id_list = [], []
     model.eval()
-    for i, batch in tqdm(enumerate(loader), desc="Eval", disable=args.local_rank not in [-1, 0]):
+    print(f"Embedding {path}")
+    for batch in tqdm(loader, desc="Eval", disable=args.local_rank not in [-1, 0]):
         batch = tuple(t.to(args.device) for t in batch)
         with torch.no_grad():
-            inputs = {"input_ids": batch[0].long(
-            ), "attention_mask": batch[1].long()}
+            inputs = {
+                "input_ids": batch[0].long(),
+                "attention_mask": batch[1].long()
+            }
             idx = batch[3].long()
             if is_query:
                 embs = model.query_emb(**inputs)
@@ -127,15 +130,14 @@ def passage_dist_eval(args, model, tokenizer):
 def combined_dist_eval(args, model, queries_path, passage_path, query_fn, psg_fn, topk_dev_qid_pid, ref_dict):
     # get query/psg embeddings here
     eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
-    query_embs, query_ids = embedding_inference(
-        args, queries_path, model, query_fn, eval_batch_size, 1, True)
+    query_embs, query_ids = embedding_inference(args, queries_path, model, query_fn, eval_batch_size, 1, True)
     query_pkl = {"emb": query_embs, "id": query_ids}
     all_query_list = all_gather(query_pkl)
     query_embs = concat_key(all_query_list, "emb")
     query_ids = concat_key(all_query_list, "id")
     print(query_embs.shape, query_ids.shape)
-    psg_embs, psg_ids = embedding_inference(
-        args, passage_path, model, psg_fn, eval_batch_size, 2, False)
+
+    psg_embs, psg_ids = embedding_inference(args, passage_path, model, psg_fn, eval_batch_size, 2, False)
     print(psg_embs.shape)
 
     top_k = 100

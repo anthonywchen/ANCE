@@ -1,5 +1,5 @@
-mkdir ../data/raw_data/
-cd ../data/raw_data/
+mkdir data/raw_data/
+cd data/raw_data/
 
 # download MSMARCO passage data
 wget https://msmarco.blob.core.windows.net/msmarcoranking/collectionandqueries.tar.gz
@@ -52,5 +52,3 @@ python data/download_data.py --resource data.retriever.trivia
 python data/download_data.py --resource data.retriever.qas.nq
 python data/download_data.py --resource data.retriever.qas.trivia
 python data/download_data.py --resource checkpoint.retriever.multiset.bert-base-encoder
-
-

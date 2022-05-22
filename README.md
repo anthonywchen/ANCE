@@ -35,6 +35,24 @@ To install requirements, run the following commands:
 git clone https://github.com/microsoft/ANCE
 cd ANCE
 python setup.py install
+
+# Install torch with CUDA11.1 since that's what we have
+pip install torch==1.10.1+cu111 -f https://download.pytorch.org/whl/torch_stable.html
+
+# Install APEX
+git clone https://github.com/NVIDIA/apex
+cd apex
+pip install -v --disable-pip-version-check --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./ 
+```
+
+In file `lib/python3.8/site-packages/apex/amp/utils.py` in your virtualenv comment out lines:
+
+```python
+if x.requires_grad and cached_x.requires_grad:
+    # Make sure x is actually cached_x's autograd parent.
+    if cached_x.grad_fn.next_functions[1][0].variable is not x:
+    raise RuntimeError("x and cache[x] both require grad, but x is not \ 
+    cache[x]'s parent.  This is likely an error.")
 ```
 
 ## Data Download
@@ -46,14 +64,26 @@ bash commands/data_download.sh
 ## Data Preprocessing
 The command to preprocess passage and document data is listed below:
 
+```bash
+python data/msmarco_data.py \
+   --data_dir $raw_data_dir \
+   --out_data_dir $preprocessed_data_dir \ 
+   --model_type {use rdot_nll for ANCE FirstP, rdot_nll_multi_chunk for ANCE MaxP} \ 
+   --model_name_or_path roberta-base \ 
+   --max_seq_length {use 512 for ANCE FirstP, 2048 for ANCE MaxP} \ 
+   --data_type {use 1 for passage, 0 for document}
 ```
-python data/msmarco_data.py 
---data_dir $raw_data_dir \
---out_data_dir $preprocessed_data_dir \ 
---model_type {use rdot_nll for ANCE FirstP, rdot_nll_multi_chunk for ANCE MaxP} \ 
---model_name_or_path roberta-base \ 
---max_seq_length {use 512 for ANCE FirstP, 2048 for ANCE MaxP} \ 
---data_type {use 1 for passage, 0 for document}
+
+E.g. 
+
+```bash
+python -m data.msmarco_data \
+   --data_dir data/raw_data/ \
+   --out_data_dir data/processed_data/ \
+   --model_type rdot_nll \
+   --model_name_or_path roberta-base \
+   --max_seq_length 512 \
+   --data_type 1
 ```
 
 The data preprocessing command is included as the first step in the training command file commands/run_train.sh
@@ -61,29 +91,31 @@ The data preprocessing command is included as the first step in the training com
 ## Warmup for Training
 ANCE training starts from a pretrained BM25 warmup checkpoint. The command with our used parameters to train this warmup checkpoint is in commands/run_train_warmup.py and is shown below:
 
-        python3 -m torch.distributed.launch --nproc_per_node=1 ../drivers/run_warmup.py \
-        --train_model_type rdot_nll \
-        --model_name_or_path roberta-base \
-        --task_name MSMarco \
-        --do_train \
-        --evaluate_during_training \
-        --data_dir ${location of your raw data}  
-        --max_seq_length 128 
-        --per_gpu_eval_batch_size=256 \
-        --per_gpu_train_batch_size=32 \
-        --learning_rate 2e-4  \
-        --logging_steps 100   \
-        --num_train_epochs 2.0  \
-        --output_dir ${location for checkpoint saving} \
-        --warmup_steps 1000  \
-        --overwrite_output_dir \
-        --save_steps 30000 \
-        --gradient_accumulation_steps 1 \
-        --expected_train_size 35000000 \
-        --logging_steps_per_eval 1 \
-        --fp16 \
-        --optimizer lamb \
-        --log_dir ~/tensorboard/${DLWS_JOB_ID}/logs/OSpass
+```bash
+python -m torch.distributed.launch --nproc_per_node=8 drivers/run_warmup.py \
+   --train_model_type rdot_nll \
+   --model_name_or_path roberta-base \
+   --task_name MSMarco \
+   --do_train \
+   --data_dir data/raw_data/ \
+   --max_seq_length 128 \
+   --evaluate_during_training \
+   --per_gpu_eval_batch_size 128 \
+   --per_gpu_train_batch_size 32 \
+   --learning_rate 5e-5  \
+   --logging_steps 500 \
+   --num_train_epochs 1  \
+   --output_dir outputs/bm25 \
+   --warmup_steps 1000  \
+   --overwrite_output_dir \
+   --save_steps 7500 \
+   --gradient_accumulation_steps 1 \
+   --expected_train_size 35000000 \
+   --logging_steps_per_eval 30 \
+   --fp16 \
+   --optimizer lamb \
+   --log_dir tensorboard/bm25/logs
+```
 
 ## Training
 
@@ -95,37 +127,37 @@ To train the model(s) in the paper, you need to start two commands in the follow
 
 	b. Initial ANN data generation: this step will use the pretrained BM25 warmup checkpoint to generate the initial training data. The command is as follow:
 
-        python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann_data_gen.py 
-        --training_dir {# checkpoint location, not used for initial data generation} \ 
-        --init_model_dir {pretrained BM25 warmup checkpoint location} \ 
-        --model_type rdot_nll \
-        --output_dir $model_ann_data_dir \
-        --cache_dir $model_ann_data_dir_cache \
-        --data_dir $preprocessed_data_dir \
-        --max_seq_length 512 \
-        --per_gpu_eval_batch_size 16 \
-        --topk_training {top k candidates for ANN search(ie:200)} \ 
-        --negative_sample {negative samples per query(20)} \ 
-        --end_output_num 0 # only set as 0 for initial data generation, do not set this otherwise
+        python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann_data_gen.py 
+        --training_dir {# checkpoint location, not used for initial data generation} \ 
+        --init_model_dir {pretrained BM25 warmup checkpoint location} \ 
+        --model_type rdot_nll \
+        --output_dir $model_ann_data_dir \
+        --cache_dir $model_ann_data_dir_cache \
+        --data_dir $preprocessed_data_dir \
+        --max_seq_length 512 \
+        --per_gpu_eval_batch_size 16 \
+        --topk_training {top k candidates for ANN search(ie:200)} \ 
+        --negative_sample {negative samples per query(20)} \ 
+        --end_output_num 0 # only set as 0 for initial data generation, do not set this otherwise
 
 	c. Training: ANCE training with the most recently generated ANN data, the command is as follow:
 
-        python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann.py 
-        --model_type rdot_nll \
-        --model_name_or_path $pretrained_checkpoint_dir \
-        --task_name MSMarco \
-        --triplet {# default = False, action="store_true", help="Whether to run training}\ 
-        --data_dir $preprocessed_data_dir \
-        --ann_dir {location of the ANN generated training data} \ 
-        --max_seq_length 512 \
-        --per_gpu_train_batch_size=8 \
-        --gradient_accumulation_steps 2 \
-        --learning_rate 1e-6 \
-        --output_dir $model_dir \
-        --warmup_steps 5000 \
-        --logging_steps 100 \
-        --save_steps 10000 \
-        --optimizer lamb 
+        python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann.py 
+        --model_type rdot_nll \
+        --model_name_or_path $pretrained_checkpoint_dir \
+        --task_name MSMarco \
+        --triplet {# default = False, action="store_true", help="Whether to run training}\ 
+        --data_dir $preprocessed_data_dir \
+        --ann_dir {location of the ANN generated training data} \ 
+        --max_seq_length 512 \
+        --per_gpu_train_batch_size=8 \
+        --gradient_accumulation_steps 2 \
+        --learning_rate 1e-6 \
+        --output_dir $model_dir \
+        --warmup_steps 5000 \
+        --logging_steps 100 \
+        --save_steps 10000 \
+        --optimizer lamb 
 		
 2. Once training starts, start another job in parallel to fetch the latest checkpoint from the ongoing training and update the training data. To do that, run
 
@@ -140,12 +172,12 @@ The command for inferencing query and passage/doc embeddings is the same as that
 
 The evaluation is done through "Calculate Metrics.ipynb". This notebook calculates full ranking and reranking metrics used in the paper including NDCG, MRR, hole rate, recall for passage/document, dev/eval set specified by user. In order to run it, you need to define the following parameters at the beginning of the Jupyter notebook.
         
-        checkpoint_path = {location for dumpped query and passage/document embeddings which is output_dir from run_ann_data_gen.py}
-        checkpoint =  {embedding from which checkpoint(ie: 200000)}
-        data_type =  {0 for document, 1 for passage}
-        test_set =  {0 for MSMARCO dev_set, 1 for TREC eval_set}
-        raw_data_dir = 
-        processed_data_dir = 
+        checkpoint_path = {location for dumpped query and passage/document embeddings which is output_dir from run_ann_data_gen.py}
+        checkpoint = {embedding from which checkpoint(ie: 200000)}
+        data_type = {0 for document, 1 for passage}
+        test_set = {0 for MSMARCO dev_set, 1 for TREC eval_set}
+        raw_data_dir = 
+        processed_data_dir = 
 
 ## ANCE VS DPR on OpenQA Benchmarks
 We also evaluate ANCE on the OpenQA benchmark used in a parallel work ([DPR](https://github.com/facebookresearch/DPR)). At the time of our experiment, only the pre-processed NQ and TriviaQA data are released. 

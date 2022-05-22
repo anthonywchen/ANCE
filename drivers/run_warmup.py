@@ -1,34 +1,18 @@
 import sys
-sys.path += ["../"]
-import pandas as pd
-from transformers import glue_compute_metrics as compute_metrics, glue_output_modes as output_modes, glue_processors as processors
-from transformers import (
-    AdamW,
-    RobertaConfig,
-    RobertaForSequenceClassification,
-    RobertaTokenizer,
-    get_linear_schedule_with_warmup,
-    RobertaModel,
-)
-import transformers
+sys.path.append('./')
+from transformers import AdamW, get_linear_schedule_with_warmup
 from utils.eval_mrr import passage_dist_eval
 from model.models import MSMarcoConfigDict
 from utils.lamb import Lamb
 import os
-from os import listdir
-from os.path import isfile, join
 import argparse
-import glob
 import json
 import logging
-import random
-import numpy as np
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from tqdm import tqdm, trange
 import torch.distributed as dist
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch import nn
 from utils.util import getattr_recursive, set_seed, is_first_worker, StreamingDataset
 
 
@@ -170,7 +154,7 @@ def train(args, model, tokenizer, f, train_fn):
     set_seed(args)  # Added here for reproductibility
     for m_epoch in train_iterator:
         f.seek(0)
-        sds = StreamingDataset(f,train_fn)
+        sds = StreamingDataset(f, train_fn)
         epoch_iterator = DataLoader(sds, batch_size=args.per_gpu_train_batch_size, num_workers=1)
         for step, batch in tqdm(enumerate(epoch_iterator),desc="Iteration",disable=args.local_rank not in [-1,0]):
 
@@ -221,42 +205,30 @@ def train(args, model, tokenizer, f, train_fn):
 
                 if is_first_worker() and args.save_steps > 0 and global_step % args.save_steps == 0:
                     # Save model checkpoint
-                    output_dir = os.path.join(
-                        args.output_dir, "checkpoint-{}".format(global_step))
+                    output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
+                    logger.info("Saving model checkpoint to %s", output_dir)
                     if not os.path.exists(output_dir):
                         os.makedirs(output_dir)
-                    model_to_save = (
-                        model.module if hasattr(model, "module") else model
-                    )  # Take care of distributed/parallel training
+                    model_to_save = (model.module if hasattr(model, "module") else model)  # Take care of distributed/parallel training
                     model_to_save.save_pretrained(output_dir)
                     tokenizer.save_pretrained(output_dir)
-
-                    torch.save(args, os.path.join(
-                        output_dir, "training_args.bin"))
-                    logger.info("Saving model checkpoint to %s", output_dir)
-
-                    torch.save(optimizer.state_dict(), os.path.join(
-                        output_dir, "optimizer.pt"))
-                    torch.save(scheduler.state_dict(), os.path.join(
-                        output_dir, "scheduler.pt"))
-                    logger.info(
-                        "Saving optimizer and scheduler states to %s", output_dir)
+                    torch.save(args, os.path.join(output_dir, "training_args.bin"))
+                    torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
+                    torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
                 dist.barrier()
 
                 if args.logging_steps > 0 and global_step % args.logging_steps == 0:
-                    logs = {}
                     if args.evaluate_during_training and global_step % (args.logging_steps_per_eval*args.logging_steps) == 0:
                         model.eval()
-                        reranking_mrr, full_ranking_mrr = passage_dist_eval(
-                            args, model, tokenizer)
+                        reranking_mrr, full_ranking_mrr = passage_dist_eval(args, model, tokenizer)
                         if is_first_worker():
-                            print(
-                                "Reranking/Full ranking mrr: {0}/{1}".format(str(reranking_mrr), str(full_ranking_mrr)))
-                            mrr_dict = {"reranking": float(
-                                reranking_mrr), "full_raking": float(full_ranking_mrr)}
+                            mrr_dict = {
+                                "reranking": float(reranking_mrr),
+                                "full_raking": float(full_ranking_mrr)
+                            }
                             tb_writer.add_scalars("mrr", mrr_dict, global_step)
-                            print(args.output_dir)
 
+                    logs = {}
                     loss_scalar = (tr_loss - logging_loss) / args.logging_steps
                     learning_rate_scalar = scheduler.get_lr()[0]
                     logs["learning_rate"] = learning_rate_scalar
@@ -268,7 +240,6 @@ def train(args, model, tokenizer, f, train_fn):
                             print(key, type(value))
                             tb_writer.add_scalar(key, value, global_step)
                         tb_writer.add_scalar("epoch", m_epoch, global_step)
-                        print(json.dumps({**logs, **{"step": global_step}}))
                     dist.barrier()
 
         if args.max_steps > 0 and global_step > args.max_steps:
@@ -711,17 +682,13 @@ def evaluation(args, model, tokenizer):
         checkpoints = [model_dir]
 
         for checkpoint in checkpoints:
-            global_step = checkpoint.split(
-                "-")[-1] if len(checkpoints) > 1 else ""
-            prefix = checkpoint.split(
-                "/")[-1] if checkpoint.find("checkpoint") != -1 else ""
+            global_step = checkpoint.split("-")[-1] if len(checkpoints) > 1 else ""
+            prefix = checkpoint.split("/")[-1] if checkpoint.find("checkpoint") != -1 else ""
 
             model.eval()
-            reranking_mrr, full_ranking_mrr = passage_dist_eval(
-                args, model, tokenizer)
+            reranking_mrr, full_ranking_mrr = passage_dist_eval(args, model, tokenizer)
             if is_first_worker():
-                print(
-                    "Reranking/Full ranking mrr: {0}/{1}".format(str(reranking_mrr), str(full_ranking_mrr)))
+                print("Reranking/Full ranking mrr: {0}/{1}".format(str(reranking_mrr), str(full_ranking_mrr)))
             dist.barrier()
     return results
 
@@ -729,9 +696,7 @@ def evaluation(args, model, tokenizer):
 def main():
     args = get_arguments()
     set_env(args)
-
-    config, tokenizer, model, configObj = load_stuff(
-        args.train_model_type, args)
+    config, tokenizer, model, configObj = load_stuff(args.train_model_type, args)
 
     # Training
     if args.do_train:
@@ -741,12 +706,9 @@ def main():
             return configObj.process_fn(line, i, tokenizer, args)
 
         with open(args.data_dir+"/triples.train.small.tsv", encoding="utf-8-sig") as f:
-            train_batch_size = args.per_gpu_train_batch_size * \
-                max(1, args.n_gpu)
-            global_step, tr_loss = train(
-                args, model, tokenizer, f, train_fn)
-            logger.info(" global_step = %s, average loss = %s",
-                        global_step, tr_loss)
+            train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
+            global_step, tr_loss = train(args, model, tokenizer, f, train_fn)
+            logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
     save_checkpoint(args, model, tokenizer)
 

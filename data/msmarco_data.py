@@ -154,7 +154,8 @@ def preprocess(args):
         32,
         in_passage_path,
         out_passage_path,
-        PassagePreprocessingFn)
+        PassagePreprocessingFn
+    )
 
     print('start merging splits')
     with open(out_passage_path, 'wb') as f:

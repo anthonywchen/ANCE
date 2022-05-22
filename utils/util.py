@@ -1,16 +1,9 @@
 import sys
 sys.path += ['../']
-import pandas as pd
-from sklearn.metrics import roc_curve, auc
 import gzip
 import copy
-import torch
-from torch import nn
 import torch.distributed as dist
-from tqdm import tqdm, trange
 import os
-from os import listdir
-from os.path import isfile, join
 import json
 import logging
 import random

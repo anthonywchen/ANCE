@@ -12,6 +12,11 @@ faiss-cpu = "^1.7.2"
 wget = "^3.2"
 tqdm = "^4.64.0"
 jupyter = "^1.0.0"
+matplotlib = "^3.5.2"
+pandas = "^1.4.2"
+tokenizers = "^0.12.1"
+tensorboardX = "^2.5"
+tensorboard = "^2.9.0"
 
 [tool.poetry.dev-dependencies]
 
