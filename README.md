@@ -165,6 +165,14 @@ python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann.p
 
    The command is similar to the initial ANN data generation command explained previously
 
+
+## Logging
+To launch a tensorboard logging module, run:
+
+```bash
+ tensorboard --logdir <log directory> ---host <hostname>
+```
+
 ## Inference
 The command for inferencing query and passage/doc embeddings is the same as that for Initial ANN data generation described above as the first step in ANN data generation is inference. However you need to add --inference to the command to have the program to stop after the initial inference step. commands/run_inference.sh provides a sample command.
 

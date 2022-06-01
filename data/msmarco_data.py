@@ -124,7 +124,6 @@ def write_query_rel(args, pid2offset, query_file, positive_id_file, out_query_fi
 
 
 def preprocess(args):
-
     pid2offset = {}
     if args.data_type == 0:
         in_passage_path = os.path.join(
@@ -282,16 +281,21 @@ def GetProcessingFn(args, query=False):
         token_type_ids = ([0] if query else [1]) * passage_len + [0] * pad_len
         attention_mask = [1] * passage_len + [0] * pad_len
 
+        # Truncate length
+        passage = passage[:max_len]
+        token_type_ids = token_type_ids[:max_len]
+        attention_mask = attention_mask[:max_len]
+
         passage_collection = [(i, passage, attention_mask, token_type_ids)]
 
         query2id_tensor = torch.tensor(
-            [f[0] for f in passage_collection], dtype=torch.long)
+            np.array([f[0] for f in passage_collection]), dtype=torch.long)
         all_input_ids_a = torch.tensor(
-            [f[1] for f in passage_collection], dtype=torch.int)
+            np.array([f[1] for f in passage_collection]), dtype=torch.int)
         all_attention_mask_a = torch.tensor(
-            [f[2] for f in passage_collection], dtype=torch.bool)
+            np.array([f[2] for f in passage_collection]), dtype=torch.bool)
         all_token_type_ids_a = torch.tensor(
-            [f[3] for f in passage_collection], dtype=torch.uint8)
+            np.array([f[3] for f in passage_collection]), dtype=torch.uint8)
 
         dataset = TensorDataset(
             all_input_ids_a,

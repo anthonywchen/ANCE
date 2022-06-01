@@ -1,6 +1,7 @@
 import sys
 
 sys.path += ["../"]
+import datetime
 import torch
 import os
 import faiss
@@ -14,7 +15,6 @@ from utils.util import (
     get_latest_ann_data,
 )
 import csv
-import copy
 import transformers
 from transformers import (
     AdamW,
@@ -26,12 +26,10 @@ from transformers import (
 )
 from data.msmarco_data import GetProcessingFn
 from model.models import MSMarcoConfigDict, ALL_MODELS
-from torch import nn
 import torch.distributed as dist
 from tqdm import tqdm, trange
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 import numpy as np
-from os.path import isfile, join
 import argparse
 import json
 import logging
@@ -40,12 +38,7 @@ import time
 import pytrec_eval
 
 torch.multiprocessing.set_sharing_strategy("file_system")
-
-
 logger = logging.getLogger(__name__)
-
-
-# ANN - active learning ------------------------------------------------------
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -54,14 +47,14 @@ except ImportError:
 
 
 def get_latest_checkpoint(args):
-    if not os.path.exists(args.training_dir):
-        return args.init_model_dir, 0
-    subdirectories = list(next(os.walk(args.training_dir))[1])
-
     def valid_checkpoint(checkpoint):
         chk_path = os.path.join(args.training_dir, checkpoint)
         scheduler_path = os.path.join(chk_path, "scheduler.pt")
         return os.path.exists(scheduler_path)
+
+    if not os.path.exists(args.training_dir):
+        return args.init_model_dir, 0
+    subdirectories = list(next(os.walk(args.training_dir))[1])
 
     checkpoint_nums = [
         get_checkpoint_no(s) for s in subdirectories if valid_checkpoint(s)
@@ -142,7 +135,6 @@ def InferenceEmbeddingFromStreamDataLoader(
     args, model, train_dataloader, is_query_inference=True, prefix=""
 ):
     # expect dataset from ReconstructTrainingSet
-    results = {}
     eval_batch_size = args.per_gpu_eval_batch_size
 
     # Inference!
@@ -163,9 +155,7 @@ def InferenceEmbeddingFromStreamDataLoader(
         position=0,
         leave=True,
     ):
-
         idxs = batch[3].detach().numpy()  # [#B]
-
         batch = tuple(t.to(args.device) for t in batch)
 
         with torch.no_grad():
@@ -196,7 +186,7 @@ def StreamInferenceDoc(args, model, fn, prefix, f, is_query_inference=True):
     inference_batch_size = args.per_gpu_eval_batch_size  # * max(1, args.n_gpu)
     inference_dataset = StreamingDataset(f, fn)
     inference_dataloader = DataLoader(
-        inference_dataset, batch_size=inference_batch_size
+        inference_dataset, batch_size=inference_batch_size, num_workers=1
     )
 
     if args.local_rank != -1:
@@ -288,7 +278,7 @@ def generate_new_ann(
         dim = passage_embedding.shape[1]
         print("passage embedding shape: " + str(passage_embedding.shape))
         top_k = args.topk_training
-        faiss.omp_set_num_threads(16)
+        faiss.omp_set_num_threads(64)
         cpu_index = faiss.IndexFlatIP(dim)
         cpu_index.add(passage_embedding)
         logger.info("***** Done ANN Index *****")
@@ -304,7 +294,7 @@ def generate_new_ann(
             dev_I,
         )
 
-        # Construct new traing set ==================================
+        # Construct new training set
         chunk_factor = args.ann_chunk_factor
         effective_idx = output_num % chunk_factor
 
@@ -574,9 +564,9 @@ def get_arguments():
 
     parser.add_argument(
         "--ann_chunk_factor",
-        default=5,  # for 500k queryes, divided into 100k chunks for each epoch
+        default=5,  # for 500k queries, divided into 100k chunks for each epoch
         type=int,
-        help="devide training queries into chunks",
+        help="divide training queries into chunks",
     )
 
     parser.add_argument(
@@ -670,7 +660,9 @@ def set_env(args):
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
-        torch.distributed.init_process_group(backend="nccl")
+        torch.distributed.init_process_group(
+            backend="nccl", timeout=datetime.timedelta(seconds=36000)
+        )
         args.n_gpu = 1
     args.device = device
 
