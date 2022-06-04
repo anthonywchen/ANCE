@@ -49,18 +49,17 @@ python ../data/msmarco_data.py \
 
 #echo -e $preprocess_cmd "\n"
 #eval $preprocess_cmd
-
-if [[ $? = 0 ]]; then
-    echo -e "successfully created preprocessed data\n"
-else
-	echo "preprocessing failed"
-    echo "failure: $?"
-    exit 1
-fi
+#if [[ $? = 0 ]]; then
+#    echo -e "successfully created preprocessed data\n"
+#else
+#	echo "preprocessing failed"
+#    echo "failure: $?"
+#    exit 1
+#fi
 
 ######## Initial ANN Data generation ########
 initial_data_gen_cmd="\
-CUDA_VISIBLE_DEVICES=0,3,6,7 python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann_data_gen.py \
+python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann_data_gen.py \
   --training_dir $model_dir \
   --init_model_dir $pretrained_checkpoint_dir \
   --model_type $model_type \
@@ -75,8 +74,8 @@ CUDA_VISIBLE_DEVICES=0,3,6,7 python -m torch.distributed.launch --nproc_per_node
   --end_output_num 0
 "
 
-echo $initial_data_gen_cmd
-eval $initial_data_gen_cmd
+#echo $initial_data_gen_cmd
+#eval $initial_data_gen_cmd
 
 if [[ $? = 0 ]]; then
     echo -e "successfully created initial ann training data\n"
@@ -96,7 +95,7 @@ logging_steps=500
 save_steps=10000
 
 train_cmd="\
-python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann.py \
+CUDA_VISIBLE_DEVICES=4,5,6,7 python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann.py \
   --model_type $model_type \
   --model_name_or_path $pretrained_checkpoint_dir \
   --task_name MSMarco \
@@ -119,4 +118,4 @@ python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann.p
 "
 
 echo $train_cmd
-#eval $train_cmd
+eval $train_cmd

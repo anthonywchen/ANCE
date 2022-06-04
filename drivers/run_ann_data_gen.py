@@ -661,7 +661,7 @@ def set_env(args):
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
         torch.distributed.init_process_group(
-            backend="nccl", timeout=datetime.timedelta(seconds=36000)
+            backend="nccl", timeout=datetime.timedelta(seconds=360000)
         )
         args.n_gpu = 1
     args.device = device
