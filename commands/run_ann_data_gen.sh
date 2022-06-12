@@ -22,21 +22,20 @@ job_name="ance_train_${topk_training}_${negative_sample}"
 ##################################### Inital ANN Data generation ################################
 model_dir="${base_data_dir}${job_name}/"
 model_ann_data_dir="${model_dir}ann_data/"
-pretrained_checkpoint_dir="warmup checkpoint path"
 
 initial_data_gen_cmd="\
 CUDA_VISIBLE_DEVICES=4,5,6,7 python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann_data_gen.py \
   --training_dir $model_dir \
-  --init_model_dir $pretrained_checkpoint_dir \
   --model_type $model_type \
   --output_dir $model_ann_data_dir \
   --cache_dir "${model_ann_data_dir}cache/" \
   --data_dir $preprocessed_data_dir \
   --max_seq_length $seq_length \
-  --ann_chunk_factor 20 \
-  --per_gpu_eval_batch_size 128 \
-   --topk_training $topk_training \
-   --negative_sample $negative_sample \
+  --ann_chunk_factor 5 \
+  --per_gpu_eval_batch_size 256 \
+  --topk_training $topk_training \
+  --negative_sample $negative_sample \
+  --fp16
 "
 
 echo $initial_data_gen_cmd

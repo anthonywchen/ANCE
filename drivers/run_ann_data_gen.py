@@ -36,6 +36,7 @@ import logging
 import random
 import time
 import pytrec_eval
+random.seed(0)
 
 torch.multiprocessing.set_sharing_strategy("file_system")
 logger = logging.getLogger(__name__)
@@ -120,6 +121,16 @@ def load_model(args, checkpoint_path):
         cache_dir=args.cache_dir if args.cache_dir else None,
     )
     model.to(args.device)
+
+    if args.fp16:
+        try:
+            from apex import amp
+        except ImportError:
+            raise ImportError(
+                "Please install apex from https://www.github.com/nvidia/apex to use fp16 training."
+            )
+        model = amp.initialize(model, opt_level=args.fp16_opt_level)
+
     logger.info("Inference parameters %s", args)
     if args.local_rank != -1:
         model = torch.nn.parallel.DistributedDataParallel(
@@ -185,8 +196,9 @@ def InferenceEmbeddingFromStreamDataLoader(
 def StreamInferenceDoc(args, model, fn, prefix, f, is_query_inference=True):
     inference_batch_size = args.per_gpu_eval_batch_size  # * max(1, args.n_gpu)
     inference_dataset = StreamingDataset(f, fn)
+    # `num_workers` needs to be 0 for `dist.barrier()` to not hang when I tested it
     inference_dataloader = DataLoader(
-        inference_dataset, batch_size=inference_batch_size, num_workers=1
+        inference_dataset, batch_size=inference_batch_size, num_workers=0
     )
 
     if args.local_rank != -1:
@@ -199,6 +211,8 @@ def StreamInferenceDoc(args, model, fn, prefix, f, is_query_inference=True):
         is_query_inference=is_query_inference,
         prefix=prefix,
     )
+    if args.local_rank != -1:
+        dist.barrier()
 
     logger.info("merging embeddings")
 
@@ -278,7 +292,7 @@ def generate_new_ann(
         dim = passage_embedding.shape[1]
         print("passage embedding shape: " + str(passage_embedding.shape))
         top_k = args.topk_training
-        faiss.omp_set_num_threads(64)
+        faiss.omp_set_num_threads(48)
         cpu_index = faiss.IndexFlatIP(dim)
         cpu_index.add(passage_embedding)
         logger.info("***** Done ANN Index *****")
@@ -488,9 +502,8 @@ def get_arguments():
 
     parser.add_argument(
         "--init_model_dir",
-        default=None,
+        default="",
         type=str,
-        required=True,
         help="Initial model dir, will use this if no checkpoint is found in model_dir",
     )
 
@@ -632,6 +645,20 @@ def get_arguments():
     )
 
     parser.add_argument(
+        "--fp16",
+        action="store_true",
+        help="Whether to use 16-bit (mixed) precision (through NVIDIA apex) instead of 32-bit",
+    )
+
+    parser.add_argument(
+        "--fp16_opt_level",
+        type=str,
+        default="O1",
+        help="For fp16: Apex AMP optimization level selected in ['O0', 'O1', 'O2', and 'O3']."
+        "See details at https://nvidia.github.io/apex/amp.html",
+    )
+
+    parser.add_argument(
         "--config_name",
         default="",
         type=str,
@@ -673,6 +700,7 @@ def set_env(args):
 
     # Setup logging
     logging.basicConfig(
+        filename=os.path.join(args.training_dir, "ann_data_gen.log"),
         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN,
@@ -703,11 +731,16 @@ def ann_data_gen(args):
 
     while args.end_output_num == -1 or output_num <= args.end_output_num:
         next_checkpoint, latest_step_num = get_latest_checkpoint(args)
+        logger.info(
+            f"Next checkpoint {next_checkpoint}, Last checkpoint {last_checkpoint} "
+            f"latest_step_num {latest_step_num}"
+        )
 
         if args.only_keep_latest_embedding_file:
             latest_step_num = 0
 
         if next_checkpoint == last_checkpoint:
+            logger.info(f"sleeping...")
             time.sleep(60)
         else:
             logger.info("start generate ann data number %d", output_num)

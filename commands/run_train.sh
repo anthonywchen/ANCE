@@ -46,20 +46,12 @@ python ../data/msmarco_data.py \
   --max_seq_length $seq_length \
   --data_type $data_type \
 "
-
 #echo -e $preprocess_cmd "\n"
 #eval $preprocess_cmd
-#if [[ $? = 0 ]]; then
-#    echo -e "successfully created preprocessed data\n"
-#else
-#	echo "preprocessing failed"
-#    echo "failure: $?"
-#    exit 1
-#fi
 
 ######## Initial ANN Data generation ########
 initial_data_gen_cmd="\
-python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann_data_gen.py \
+CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --master_port=1234 --nproc_per_node=$gpu_no ../drivers/run_ann_data_gen.py \
   --training_dir $model_dir \
   --init_model_dir $pretrained_checkpoint_dir \
   --model_type $model_type \
@@ -67,30 +59,22 @@ python -m torch.distributed.launch --nproc_per_node=$gpu_no ../drivers/run_ann_d
   --cache_dir "${model_ann_data_dir}cache/" \
   --data_dir $preprocessed_data_dir \
   --max_seq_length $seq_length \
-  --ann_chunk_factor 20 \
-  --per_gpu_eval_batch_size 128 \
+  --ann_chunk_factor 5 \
+  --per_gpu_eval_batch_size 256 \
   --topk_training $topk_training \
   --negative_sample $negative_sample \
   --end_output_num 0
+  --fp16
 "
-
-#echo $initial_data_gen_cmd
-#eval $initial_data_gen_cmd
-
-if [[ $? = 0 ]]; then
-    echo -e "successfully created initial ann training data\n"
-else
-	echo "initial data generation failed"
-    echo "failure: $?"
-    exit 1
-fi
+echo $initial_data_gen_cmd
+eval $initial_data_gen_cmd
 
 ######## Training ########
 warmup_steps=5000
 per_gpu_train_batch_size=16
 gradient_accumulation_steps=1
 learning_rate=5e-6
-max_steps=150000
+max_steps=300000
 logging_steps=500
 save_steps=10000
 
@@ -114,8 +98,8 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 python -m torch.distributed.launch --nproc_per_node
   --optimizer lamb \
   --fp16
   --single_warmup \
-  --log_dir tensorboard/$job_name
+  --log_dir ../tensorboard/$job_name
 "
 
-echo $train_cmd
-eval $train_cmd
+#echo $train_cmd
+#eval $train_cmd
