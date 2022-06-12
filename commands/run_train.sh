@@ -30,7 +30,8 @@ base_data_dir="../data/raw_data/"
 preprocessed_data_dir="../data/processed_data/"
 negative_sample=4
 topk_training=200
-job_name="ance_train_${topk_training}_${negative_sample}"
+ann_chunk_factor=5
+job_name="ance_train_${topk_training}_${negative_sample}_${ann_chunk_factor}"
 pretrained_checkpoint_dir="../outputs/bm25/checkpoint-150000"
 
 ##################################### Data Preprocessing ################################
@@ -59,7 +60,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --master_port=12
   --cache_dir "${model_ann_data_dir}cache/" \
   --data_dir $preprocessed_data_dir \
   --max_seq_length $seq_length \
-  --ann_chunk_factor 5 \
+  --ann_chunk_factor $ann_chunk_factor \
   --per_gpu_eval_batch_size 256 \
   --topk_training $topk_training \
   --negative_sample $negative_sample \

@@ -17,7 +17,8 @@ base_data_dir="../data/raw_data/"
 preprocessed_data_dir="../data/processed_data/"
 negative_sample=4
 topk_training=200
-job_name="ance_train_${topk_training}_${negative_sample}"
+ann_chunk_factor=5
+job_name="ance_train_${topk_training}_${negative_sample}_${ann_chunk_factor}"
 
 ##################################### Inital ANN Data generation ################################
 model_dir="${base_data_dir}${job_name}/"
@@ -31,7 +32,7 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 python -m torch.distributed.launch --nproc_per_node
   --cache_dir "${model_ann_data_dir}cache/" \
   --data_dir $preprocessed_data_dir \
   --max_seq_length $seq_length \
-  --ann_chunk_factor 5 \
+  --ann_chunk_factor $ann_chunk_factor \
   --per_gpu_eval_batch_size 256 \
   --topk_training $topk_training \
   --negative_sample $negative_sample \
