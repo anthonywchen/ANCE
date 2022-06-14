@@ -7,10 +7,7 @@ import pickle
 from utils.util import pad_input_ids, multi_file_process, numbered_byte_file_generator, EmbeddingCache
 import csv
 from model.models import MSMarcoConfigDict, ALL_MODELS
-from torch.utils.data import DataLoader, Dataset, TensorDataset, IterableDataset, get_worker_info
 import numpy as np
-from os import listdir
-from os.path import isfile, join
 import argparse
 import json
 
@@ -252,9 +249,6 @@ def PassagePreprocessingFn(args, line, tokenizer):
     passage_len = min(len(passage), args.max_seq_length)
     input_id_b = pad_input_ids(passage, args.max_seq_length,pad_token=tokenizer.pad_token_id)
 
-    
-    
-
     return p_id.to_bytes(8,'big') + passage_len.to_bytes(4,'big') + np.array(input_id_b,np.int32).tobytes()
 
 
@@ -285,27 +279,11 @@ def GetProcessingFn(args, query=False):
         passage = passage[:max_len]
         attention_mask = attention_mask[:max_len]
         token_type_ids = token_type_ids[:max_len]
-        # passage_collection = [(i, passage, attention_mask, token_type_ids)]
-        # query2id_tensor = torch.tensor(
-        #     np.array([f[0] for f in passage_collection]), dtype=torch.long)
-        # all_input_ids_a = torch.tensor(
-        #     np.array([f[1] for f in passage_collection]), dtype=torch.int)
-        # all_attention_mask_a = torch.tensor(
-        #     np.array([f[2] for f in passage_collection]), dtype=torch.bool)
-        # all_token_type_ids_a = torch.tensor(
-        #     np.array([f[3] for f in passage_collection]), dtype=torch.uint8)
+
         query2id_tensor = torch.LongTensor([i]).squeeze()
         all_input_ids_a = torch.IntTensor(passage)
         all_attention_mask_a = torch.BoolTensor(attention_mask)
         all_token_type_ids_a = torch.ByteTensor(token_type_ids)
-
-        # dataset = TensorDataset(
-        #     all_input_ids_a,
-        #     all_attention_mask_a,
-            # all_token_type_ids_a,
-            # query2id_tensor
-        # )
-        # x = [ts for ts in dataset]
 
         return [(
             all_input_ids_a,
@@ -324,9 +302,6 @@ def GetTrainingDataProcessingFn(args, query_cache, passage_cache):
         pos_pid = int(line_arr[1])
         neg_pids = line_arr[2].split(',')
         neg_pids = [int(neg_pid) for neg_pid in neg_pids]
-
-        all_input_ids_a = []
-        all_attention_mask_a = []
 
         query_data = GetProcessingFn(
             args, query=True)(
@@ -355,9 +330,6 @@ def GetTripletTrainingDataProcessingFn(args, query_cache, passage_cache):
         pos_pid = int(line_arr[1])
         neg_pids = line_arr[2].split(',')
         neg_pids = [int(neg_pid) for neg_pid in neg_pids]
-
-        all_input_ids_a = []
-        all_attention_mask_a = []
 
         query_data = GetProcessingFn(
             args, query=True)(
