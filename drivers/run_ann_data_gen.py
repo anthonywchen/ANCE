@@ -292,9 +292,20 @@ def generate_new_ann(
         dim = passage_embedding.shape[1]
         print("passage embedding shape: " + str(passage_embedding.shape))
         top_k = args.topk_training
-        faiss.omp_set_num_threads(48)
-        cpu_index = faiss.IndexFlatIP(dim)
-        cpu_index.add(passage_embedding)
+
+        faiss.omp_set_num_threads(30)
+        if args.approx_search:
+            nlist = 100
+            nprobe = 5
+            quantizer = faiss.IndexFlatL2(dim)
+            cpu_index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+            cpu_index.nprobe = nprobe
+            cpu_index.train(passage_embedding)
+            logger.info("***** Done Training Index *****")
+            cpu_index.add(passage_embedding)
+        else:
+            cpu_index = faiss.IndexFlatIP(dim)
+            cpu_index.add(passage_embedding)
         logger.info("***** Done ANN Index *****")
 
         # measure ANN mrr
@@ -645,6 +656,12 @@ def get_arguments():
     )
 
     parser.add_argument(
+        "--approx_search",
+        action="store_true",
+        help="Whether to use approximate search",
+    )
+
+    parser.add_argument(
         "--fp16",
         action="store_true",
         help="Whether to use 16-bit (mixed) precision (through NVIDIA apex) instead of 32-bit",
@@ -699,6 +716,12 @@ def set_env(args):
         args.rank = dist.get_rank()
 
     # Setup logging
+    if is_first_worker():
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
+        if not os.path.exists(args.cache_dir):
+            os.makedirs(args.cache_dir)
+
     logging.basicConfig(
         filename=os.path.join(args.training_dir, "ann_data_gen.log"),
         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
@@ -720,12 +743,6 @@ def ann_data_gen(args):
     output_num = ann_no + 1
 
     logger.info("starting output number %d", output_num)
-
-    if is_first_worker():
-        if not os.path.exists(args.output_dir):
-            os.makedirs(args.output_dir)
-        if not os.path.exists(args.cache_dir):
-            os.makedirs(args.cache_dir)
 
     training_positive_id, dev_positive_id = load_positive_ids(args)
 

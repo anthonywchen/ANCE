@@ -278,32 +278,41 @@ def GetProcessingFn(args, query=False):
         max_len = args.max_query_length if query else args.max_seq_length
 
         pad_len = max(0, max_len - passage_len)
-        token_type_ids = ([0] if query else [1]) * passage_len + [0] * pad_len
         attention_mask = [1] * passage_len + [0] * pad_len
+        token_type_ids = ([0] if query else [1]) * passage_len + [0] * pad_len
 
         # Truncate length
         passage = passage[:max_len]
-        token_type_ids = token_type_ids[:max_len]
         attention_mask = attention_mask[:max_len]
+        token_type_ids = token_type_ids[:max_len]
+        # passage_collection = [(i, passage, attention_mask, token_type_ids)]
+        # query2id_tensor = torch.tensor(
+        #     np.array([f[0] for f in passage_collection]), dtype=torch.long)
+        # all_input_ids_a = torch.tensor(
+        #     np.array([f[1] for f in passage_collection]), dtype=torch.int)
+        # all_attention_mask_a = torch.tensor(
+        #     np.array([f[2] for f in passage_collection]), dtype=torch.bool)
+        # all_token_type_ids_a = torch.tensor(
+        #     np.array([f[3] for f in passage_collection]), dtype=torch.uint8)
+        query2id_tensor = torch.LongTensor([i]).squeeze()
+        all_input_ids_a = torch.IntTensor(passage)
+        all_attention_mask_a = torch.BoolTensor(attention_mask)
+        all_token_type_ids_a = torch.ByteTensor(token_type_ids)
 
-        passage_collection = [(i, passage, attention_mask, token_type_ids)]
+        # dataset = TensorDataset(
+        #     all_input_ids_a,
+        #     all_attention_mask_a,
+            # all_token_type_ids_a,
+            # query2id_tensor
+        # )
+        # x = [ts for ts in dataset]
 
-        query2id_tensor = torch.tensor(
-            np.array([f[0] for f in passage_collection]), dtype=torch.long)
-        all_input_ids_a = torch.tensor(
-            np.array([f[1] for f in passage_collection]), dtype=torch.int)
-        all_attention_mask_a = torch.tensor(
-            np.array([f[2] for f in passage_collection]), dtype=torch.bool)
-        all_token_type_ids_a = torch.tensor(
-            np.array([f[3] for f in passage_collection]), dtype=torch.uint8)
-
-        dataset = TensorDataset(
+        return [(
             all_input_ids_a,
             all_attention_mask_a,
             all_token_type_ids_a,
-            query2id_tensor)
-
-        return [ts for ts in dataset]
+            query2id_tensor
+        )]
 
     return fn
 

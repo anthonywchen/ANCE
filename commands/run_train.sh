@@ -52,7 +52,7 @@ python ../data/msmarco_data.py \
 
 ######## Initial ANN Data generation ########
 initial_data_gen_cmd="\
-CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --master_port=1234 --nproc_per_node=$gpu_no ../drivers/run_ann_data_gen.py \
+CUDA_VISIBLE_DEVICES=4,5,6,7 python -m torch.distributed.launch --master_port=1234 --nproc_per_node=$gpu_no ../drivers/run_ann_data_gen.py \
   --training_dir $model_dir \
   --init_model_dir $pretrained_checkpoint_dir \
   --model_type $model_type \
@@ -64,8 +64,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.launch --master_port=12
   --per_gpu_eval_batch_size 256 \
   --topk_training $topk_training \
   --negative_sample $negative_sample \
-  --end_output_num 0
-  --fp16
+  --end_output_num 0 \
+  --fp16 \
+  --approx_search
 "
 echo $initial_data_gen_cmd
 eval $initial_data_gen_cmd

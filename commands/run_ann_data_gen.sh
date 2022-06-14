@@ -36,7 +36,8 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 python -m torch.distributed.launch --nproc_per_node
   --per_gpu_eval_batch_size 256 \
   --topk_training $topk_training \
   --negative_sample $negative_sample \
-  --fp16
+  --fp16 \
+  --approx_search
 "
 
 echo $initial_data_gen_cmd
